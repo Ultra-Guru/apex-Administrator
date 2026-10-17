@@ -1,8 +1,12 @@
 package com.apex.changelog.publisher.ui.glass
 
-import androidx.compose.animation.core.Spring
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -31,6 +35,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,10 +67,13 @@ import com.kyant.shapes.RoundedRectangle
  * 全局液态玻璃设计系统 —— 基于 Kyant0 Backdrop（io.github.kyant0:backdrop，
  * Compose 最先进的液态玻璃库）。
  *
- * 每个玻璃面 = 折射（lens，API 33+）+ 模糊（blur，API 31+）+ 色彩提升
- * （vibrancy）+ 白描边高光（Highlight）+ 外投影（Shadow）+ 顶部内阴影
- * （InnerShadow）+ 半透明表面色（onDrawSurface）。低于对应 API 的设备
- * 自动降级为纯半透明面（库内置处理，无需分支）。
+ * v2.1 性能分级（卡顿根治）：折射（lens，API 33+，最贵）仅保留在「英雄面」
+ * —— 顶栏与主按钮；卡片 / 输入框 / 图标钮只用 blur（API 31+）+ vibrancy。
+ * 同屏 N 面玻璃 × 每帧重渲染是 v2.0 卡顿主因，配合壁纸 24fps 节流后
+ * 常规交互帧不再全量重渲染玻璃面。
+ *
+ * v2.1 动态：[GlassEntrance] 级联入场（淡入+上滑+微缩放，一次性）；
+ * 所有可按面（按钮 / 图标钮）弹簧缩放反馈 —— 全局「呼吸感」。
  */
 object GlassDefaults {
 
@@ -79,7 +87,7 @@ object GlassDefaults {
         if (dark) Color.Black.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.12f)
 }
 
-/** 通用玻璃卡片容器。 */
+/** 通用玻璃卡片容器（数量最多 —— 不用 lens，仅 blur，性能优先）。 */
 @Composable
 fun GlassCard(
     backdrop: LayerBackdrop,
@@ -99,7 +107,6 @@ fun GlassCard(
                 effects = {
                     vibrancy()
                     blur(6f.dp.toPx())
-                    lens(10f.dp.toPx(), 22f.dp.toPx())
                 },
                 highlight = { Highlight.Default },
                 shadow = {
@@ -141,9 +148,9 @@ fun GlassButton(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.97f else 1f,
+        targetValue = if (pressed) 0.96f else 1f,
         animationSpec = spring(
-            dampingRatio = Spring.DampingRatioNoBouncy,
+            dampingRatio = 0.75f,
             stiffness = 420f
         ),
         label = "glassPressScale"
@@ -200,7 +207,10 @@ fun GlassButton(
     )
 }
 
-/** 玻璃图标按钮（顶栏动作 / 小型操作）。 */
+/**
+ * 玻璃图标按钮（顶栏动作 / 小型操作）—— v2.1：按压弹簧缩放反馈；
+ * 小面不用 lens（性能分级：仅 blur），点击面动态感由此来。
+ */
 @Composable
 fun GlassIconButton(
     onClick: () -> Unit,
@@ -213,6 +223,16 @@ fun GlassIconButton(
 ) {
     val dark = isSystemInDarkTheme()
     val effectiveTint = if (tint.isSpecified) tint else MaterialTheme.colorScheme.onSurface
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.92f else 1f,
+        animationSpec = spring(
+            dampingRatio = 0.7f,
+            stiffness = 500f
+        ),
+        label = "iconPressScale"
+    )
     Box(
         modifier
             .drawBackdrop(
@@ -221,14 +241,19 @@ fun GlassIconButton(
                 effects = {
                     vibrancy()
                     blur(2f.dp.toPx())
-                    lens(8f.dp.toPx(), 20f.dp.toPx())
                 },
                 highlight = { Highlight.Default },
                 innerShadow = { InnerShadow(radius = 8.dp, offset = DpOffset(0.dp, 4.dp)) },
+                layerBlock = {
+                    scaleX = scale
+                    scaleY = scale
+                },
                 onDrawSurface = { drawRect(GlassDefaults.barTint(dark)) }
             )
             .size(size)
             .clickable(
+                interactionSource = interaction,
+                indication = null,
                 enabled = true,
                 role = Role.Button,
                 onClick = onClick
@@ -439,4 +464,35 @@ fun GlassDivider() {
     HorizontalDivider(
         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
     )
+}
+
+/**
+ * 玻璃面级联入场 —— 淡入 + 上滑 + 微缩放（一次性，spring 收尾）。
+ * [delayMillis] 错峰：同屏卡片依次 60ms 级联，营造「液面逐层浮起」的动态。
+ * 代价极低（单面单次属性动画，不触发布局测量），与性能分级兼容。
+ */
+@Composable
+fun GlassEntrance(
+    delayMillis: Int = 0,
+    content: @Composable () -> Unit
+) {
+    val state = remember { MutableTransitionState(false) }
+    LaunchedEffect(Unit) {
+        if (delayMillis > 0) kotlinx.coroutines.delay(delayMillis.toLong())
+        state.targetState = true
+    }
+    AnimatedVisibility(
+        visibleState = state,
+        enter = fadeIn(animationSpec = spring(stiffness = 380f)) +
+            slideInVertically(
+                animationSpec = spring(dampingRatio = 0.8f, stiffness = 320f),
+                initialOffsetY = { it / 10 }
+            ) +
+            scaleIn(
+                animationSpec = spring(dampingRatio = 0.8f, stiffness = 380f),
+                initialScale = 0.96f
+            )
+    ) {
+        content()
+    }
 }

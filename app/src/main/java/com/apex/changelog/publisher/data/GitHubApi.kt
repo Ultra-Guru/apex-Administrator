@@ -43,8 +43,23 @@ class GitHubApi(private val token: String) {
         @SerialName("private") val private: Boolean = false
     )
 
+    /** 线上最新版本（发布仓库 version.json 的三要素）。 */
+    @Serializable
+    data class ChannelVersion(
+        @SerialName("versionName") val versionName: String = "",
+        @SerialName("versionCode") val versionCode: Int = 0,
+        @SerialName("tag") val tag: String = ""
+    )
+
     @Serializable
     private data class ContentEntry(@SerialName("name") val name: String = "")
+
+    /** Contents API 单文件响应（content = base64，可能含换行）。 */
+    @Serializable
+    private data class ContentPayload(
+        @SerialName("content") val content: String = "",
+        @SerialName("encoding") val encoding: String = ""
+    )
 
     @Serializable
     private data class PutBody(
@@ -110,6 +125,79 @@ class GitHubApi(private val token: String) {
         }
 
     /**
+     * 拉取线上最新版本 —— 发布仓库（<owner/name>-Release）main 的 version.json。
+     * 404（发布仓库未自育 / 无清单）→ null，不按错误处理。
+     */
+    suspend fun fetchLatestVersion(repo: String): Result<ChannelVersion?> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val releaseRepo =
+                    if (repo.endsWith("-Release")) repo else "$repo-Release"
+                val url = apiUrl("repos/$releaseRepo/contents/version.json")
+                    .newBuilder()
+                    .addQueryParameter("ref", "main")
+                    .build()
+                val request = Request.Builder()
+                    .url(url)
+                    .headers(commonHeaders())
+                    .get()
+                    .build()
+                client.await(request).use { resp ->
+                    val body = resp.body?.string().orEmpty()
+                    when (resp.code) {
+                        200 -> {
+                            val payload = json.decodeFromString<ContentPayload>(body)
+                            val decoded = Base64.decode(
+                                payload.content.replace("\n", ""),
+                                Base64.NO_WRAP
+                            )
+                            json.decodeFromString<ChannelVersion>(
+                                decoded.toString(Charsets.UTF_8)
+                            )
+                        }
+                        404 -> null
+                        else -> throw IllegalArgumentException(errorMessage(resp.code, body))
+                    }
+                }
+            }
+        }
+
+    /**
+     * 下一版预告 —— 开发仓库 main 的 app/build.gradle.kts 源码默认 versionName
+     * （与 release.yml resolve 同源：注释行剥离后，versionName 行最后一个带引号的
+     * 数值串）。与线上版本相同 → 发布时自动追加构建序号（.1），调用方展示时提示。
+     */
+    suspend fun fetchNextVersionHint(repo: String): Result<String?> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val url = apiUrl("repos/$repo/contents/app/build.gradle.kts")
+                    .newBuilder()
+                    .addQueryParameter("ref", "main")
+                    .build()
+                val request = Request.Builder()
+                    .url(url)
+                    .headers(commonHeaders())
+                    .get()
+                    .build()
+                client.await(request).use { resp ->
+                    val body = resp.body?.string().orEmpty()
+                    when (resp.code) {
+                        200 -> {
+                            val payload = json.decodeFromString<ContentPayload>(body)
+                            val decoded = Base64.decode(
+                                payload.content.replace("\n", ""),
+                                Base64.NO_WRAP
+                            )
+                            extractGradleVersionName(decoded.toString(Charsets.UTF_8))
+                        }
+                        404 -> null
+                        else -> throw IllegalArgumentException(errorMessage(resp.code, body))
+                    }
+                }
+            }
+        }
+
+    /**
      * 提交片段文件（PUT Contents API）—— 新文件无需 sha。
      *
      * @return commit 的 html_url（发布器展示 + 可点开）
@@ -151,6 +239,19 @@ class GitHubApi(private val token: String) {
     }
 
     // ── 内部 ─────────────────────────────────────────────────────────────
+
+    /** gradle 源码默认 versionName 提取（与 release.yml resolve 规则同源）。 */
+    private fun extractGradleVersionName(gradle: String): String? {
+        // 剥离 // 注释行（release.yml 同款防双匹配），versionName 行最后一个
+        // 数值引号串 = 源码默认值（findProperty 注入语法中它在行尾）。
+        val versionLine = gradle.lineSequence()
+            .filterNot { it.trim().startsWith("//") }
+            .firstOrNull { VERSION_NAME_LINE_RE.containsMatchIn(it) }
+            ?: return null
+        return VERSION_VALUE_RE.findAll(versionLine)
+            .mapNotNull { it.groupValues.lastOrNull()?.ifBlank { null } }
+            .lastOrNull()
+    }
 
     private fun apiUrl(path: String) =
         "https://api.github.com".toHttpUrl().newBuilder()
@@ -199,5 +300,11 @@ class GitHubApi(private val token: String) {
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .build()
+
+        /** versionName 赋值行（findProperty 注入语法或直接量皆命中）。 */
+        private val VERSION_NAME_LINE_RE = Regex("versionName\\s*=")
+
+        /** 行内带引号串（取最后一个 = 源码默认值，release.yml 同款语义）。 */
+        private val VERSION_VALUE_RE = Regex("\"([^\"]*)\"")
     }
 }

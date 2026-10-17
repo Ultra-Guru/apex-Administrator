@@ -1,21 +1,19 @@
 package com.apex.changelog.publisher.ui.glass
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import kotlinx.coroutines.delay
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.min
@@ -27,20 +25,29 @@ import kotlin.math.sin
  * 薄荷 × 薰衣草 × 暖金三团柔光在底色上缓慢漂移（26s 周期），
  * 被上方所有玻璃面（模糊 / 折射 / 色彩提升）实时采样。
  * 亮暗两套浓度：暗色更低饱和，保证玻璃上文字的可读性。
+ *
+ * v2.1 性能：相位以 ~24fps 节流更新（42ms 步进）—— 26s 慢漂移下与满帧
+ * 无可感知差异，而底材层重录频次降 60%+，全部玻璃面随之减负。
+ * 卡顿主因（v2.0）= 壁纸每帧重录 × N 个玻璃面每帧重渲染（blur+lens
+ * RenderEffect 逐面逐帧执行）。相位锚定 System.nanoTime，配置重建 /
+ * 重组后不跳变；模 1 循环保持连续漂移。
  */
 @Composable
 fun AuroraWallpaper(modifier: Modifier = Modifier) {
     val dark = isSystemInDarkTheme()
-    val transition = rememberInfiniteTransition(label = "aurora")
-    val phase by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 26_000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "phase"
-    )
+    var phase by remember { mutableFloatStateOf(0f) }
+
+    // ~24fps 相位驱动：42ms 步进；相位只在实际变化时才使 drawBehind
+    // 失效重绘（下游玻璃面同步减负）。锚定 nanoTime —— 重组后不跳变。
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        val anchor = System.nanoTime()
+        while (true) {
+            val elapsed = (System.nanoTime() - anchor).coerceAtLeast(0L)
+            phase = (elapsed / 26_000_000_000f) % 1f
+            delay(42)
+        }
+    }
+
     val p = (phase * 2.0 * PI).toFloat()
 
     Box(
