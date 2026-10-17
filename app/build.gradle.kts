@@ -83,6 +83,8 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
+    // material3 1.12 不再传递 animation-core —— animateFloatAsState/spring 所在构件，显式声明
+    implementation("androidx.compose.animation:animation-core")
 
     // 液态玻璃（最先进的 Compose 液态玻璃库：Kyant0 Backdrop）。
     // backdrop 对 shapes 是 implementation 级依赖（不传递到编译类路径），
