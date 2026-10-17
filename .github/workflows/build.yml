@@ -142,9 +142,11 @@ jobs:
           echo "APK_SHA=$(sha256sum "dist/$APK_NAME" | cut -d' ' -f1)" >> "$GITHUB_ENV"
           echo "APK_SIZE=$(stat -c%s "dist/$APK_NAME")" >> "$GITHUB_ENV"
           echo "APK_URL=https://github.com/${{ github.repository }}/releases/download/${{ steps.ver.outputs.tag }}/$APK_NAME" >> "$GITHUB_ENV"
-          # 签名证书指纹（客户端可校验；亦可人工比对）
+          # 签名证书指纹（客户端可校验；亦可人工比对）。
+          # keytool 失败（如无 v1 JAR 签名块）/ grep 无匹配都不阻断发版 —— 指纹是
+          # 增强校验项，缺失仅置空（version.json 相应字段为 null）。
           CERT_SHA=$(keytool -printcert -jarfile "dist/$APK_NAME" 2>/dev/null \
-            | grep -m1 'SHA256:' | sed 's/.*SHA256:\s*//' | tr -d ' ' | tr -d ':' | tr 'A-F' 'a-f')
+            | grep -m1 'SHA256:' | sed 's/.*SHA256:\s*//' | tr -d ' ' | tr -d ':' | tr 'A-F' 'a-f' || true)
           [ ${#CERT_SHA} -eq 64 ] && echo "CERT_SHA=$CERT_SHA" >> "$GITHUB_ENV" || echo "CERT_SHA=" >> "$GITHUB_ENV"
           echo "📦 $APK_NAME $(stat -c%s dist/$APK_NAME) bytes"
 
