@@ -34,6 +34,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -405,6 +406,9 @@ fun MainScreen(
         // ── 本机发送历史 ────────────────────────────────────────────
         val history = remember { PublisherPrefs.history(context) }
         if (history.isNotEmpty()) {
+            // 可观察 locale（Compose 告 NonObservableLocale 的正解）：
+            // 配置变更（语言切换）时重组重排，而非直接 Locale.getDefault()
+            val locale = LocalConfiguration.current.locales[0]
             GlassCard(backdrop = backdrop, modifier = Modifier.fillMaxWidth()) {
                 Text(
                     "本机发送历史（最近 ${history.size} 条）",
@@ -427,7 +431,7 @@ fun MainScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
-                                SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
+                                SimpleDateFormat("MM-dd HH:mm", locale)
                                     .format(Date(item.timeMs)),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.outline
