@@ -305,7 +305,7 @@ fun MainScreen(contentPadding: PaddingValues) {
                             )
                             Spacer(Modifier.height(8.dp))
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(onClick = { openUrl(context, r.url) }) {
+                                Button(onClick = { openUrl(context, r.commitUrl) }) {
                                     Text("查看提交")
                                 }
                                 Button(onClick = {
