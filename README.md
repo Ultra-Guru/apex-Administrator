@@ -87,4 +87,19 @@ classic token（`ghp_`）也可用：只勾 `repo` scope。
 | `build.yml` | PR 合并 / 直推 main | 版本自增 → 签名出包 → xdelta3 补丁 → version.json 双落点 → Release |
 
 安装：Actions 完成后到 [Releases](https://github.com/Ultra-Guru/apex-Administrator/releases)
-下载 `Publisher-*.apk`，或在已安装的发布器里「设置 → 软件更新」直接增量更新。
+下载 `ApexAdministrator-*.apk`，或在已安装的发布器里「设置 → 软件更新」直接增量更新。
+
+## 技术栈
+
+Kotlin 2.4.21 · AGP 9.1.0（R8 9.4.24 固定）· Gradle 9.3.1 · Compose BOM 2026.09.00
+（compileSdk 37）· Material 3 · Kyant0 Backdrop 2.0.1（液态玻璃）· OkHttp 4.12 ·
+kotlinx-serialization —— 单模块、零 DI。
+
+## 本地构建
+
+```bash
+gradle wrapper --gradle-version 9.3.1   # 仓库不含 wrapper jar（CI 同款生成）
+./gradlew :app:assembleRelease
+# 产物：app/build/outputs/apk/release/app-release.apk
+# （仓库根放 keystore.jks 时走正式签名，否则 debug 签名）
+```

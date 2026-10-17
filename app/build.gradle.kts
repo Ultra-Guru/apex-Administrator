@@ -7,7 +7,8 @@ plugins {
 
 android {
     namespace = "com.apex.changelog.publisher"
-    compileSdk = 36
+    // backdrop / shapes / Compose 1.12.x 的 AAR 元数据均要求 minCompileSdk 37
+    compileSdk = 37
 
     defaultConfig {
         // applicationId 不变 —— 已安装的发布器直接收到覆盖更新（含补丁更新）。
@@ -81,8 +82,11 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
 
-    // 液态玻璃（最先进的 Compose 液态玻璃库：Kyant0 Backdrop）
+    // 液态玻璃（最先进的 Compose 液态玻璃库：Kyant0 Backdrop）。
+    // backdrop 对 shapes 是 implementation 级依赖（不传递到编译类路径），
+    // 代码直接 import com.kyant.shapes.* —— 必须显式声明。
     implementation("io.github.kyant0:backdrop:2.0.1")
+    implementation("io.github.kyant0:shapes:1.2.1")
 
     // AndroidX
     implementation("androidx.activity:activity-compose:1.13.0")
@@ -91,7 +95,7 @@ dependencies {
 
     // 网络 / 序列化
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
     // 单仓库补丁更新：VCDIFF（xdelta3）补丁的 LZMA(.xz) 二级压缩段解码

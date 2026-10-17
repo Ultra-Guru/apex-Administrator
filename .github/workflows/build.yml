@@ -45,10 +45,10 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.14'
+          gradle-version: '9.3.1'
 
       - name: Generate Gradle wrapper
-        run: gradle wrapper --gradle-version 8.14
+        run: gradle wrapper --gradle-version 9.3.1
 
       # ── 版本决策（对账双源：main 清单 + 最新 Release 资产）────────────
       - name: Resolve version
@@ -135,7 +135,7 @@ jobs:
         run: |
           set -euo pipefail
           SRC=$(ls app/build/outputs/apk/release/*.apk | head -1)
-          APK_NAME="Publisher-${{ steps.ver.outputs.tag }}-release.apk"
+          APK_NAME="ApexAdministrator-${{ steps.ver.outputs.tag }}-release.apk"
           mkdir -p dist
           cp "$SRC" "dist/$APK_NAME"
           echo "APK_NAME=$APK_NAME" >> "$GITHUB_ENV"
@@ -240,7 +240,7 @@ jobs:
             PATCH_LINE="${{ steps.patch.outputs.name }}（${PATCH_MB} MB，$PREV_TAG → $TAG）"
           fi
           BODY=$(cat <<MD
-          ## 更新日志发布器 ${{ steps.ver.outputs.version_name }}
+          ## Apex Administrator ${{ steps.ver.outputs.version_name }}
 
           **单仓库补丁更新**产物：
           - 完整包：\`$APK_NAME\`（$(( APK_SIZE / 1048576 )) MB）
@@ -251,7 +251,7 @@ jobs:
           MD
           )
           gh release create "$TAG" \
-            --title "更新日志发布器 ${{ steps.ver.outputs.version_name }}" \
+            --title "Apex Administrator ${{ steps.ver.outputs.version_name }}" \
             --notes "$BODY" --latest \
             "${ASSETS[@]}"
           echo "✅ Release $TAG：https://github.com/${{ github.repository }}/releases/tag/$TAG"

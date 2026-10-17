@@ -39,10 +39,10 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.14'
+          gradle-version: '9.3.1'
 
       - name: Generate Gradle wrapper
-        run: gradle wrapper --gradle-version 8.14
+        run: gradle wrapper --gradle-version 9.3.1
 
       - name: Version floor sanity
         run: |
