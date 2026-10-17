@@ -1,8 +1,18 @@
-name: Build APK
+name: Release
 
-# 发布器自身构建：push main / 手动触发 → 构建 release APK（debug 签名）
-# → 上传到 GitHub Release（版本 tag 从 app/build.gradle.kts 的 versionName 解析）。
-# 与主仓库 apk.yml 同款姿势：仓库不含 wrapper jar，CI 现场生成。
+# 单仓库补丁更新 —— 发布流水线 v2
+#
+# 触发：PR 合并 / 直推 main（push 事件）→ 自动发布构件：
+#   1. 版本自增（versionCode = max(远端 version.json, 本仓库地板) + 1 防撞号，
+#      与主仓库同款对账逻辑：main 清单 + 最新 Release 资产双源取最大）；
+#   2. 签名出包（keystore 走 Secrets，无密钥时回退 debug 签名不断链）；
+#   3. 与上一版生成 xdelta3 增量补丁（-S lzma 与发布器内置 VcdiffDecoder 对应）；
+#   4. 产出 version.json（版本 / 下载 / SHA-256 / 补丁 / 证书指纹 / notes）
+#      —— Release 资产 + 提交 main 双落点（App 内「设置 → 软件更新」读取）；
+#   5. version.json 的 main 提交带 [skip ci]（GitHub 原生跳过 + 本文件双重门禁），
+#      防流水线自触发死循环。
+#
+# 并发：全局串行（发布天然互斥，与主仓库 release-pipeline 同款理由）。
 
 on:
   push:
@@ -10,17 +20,19 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: publisher-build
-  cancel-in-progress: true
+  group: publisher-release
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build & Release APK
+  release:
+    name: Build · Patch · Publish
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
+    # 双重门禁：head commit 含 [skip ci] 时不再入队（GitHub 原生跳过之外的保险）
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
     steps:
       - uses: actions/checkout@v4
 
@@ -38,28 +50,229 @@ jobs:
       - name: Generate Gradle wrapper
         run: gradle wrapper --gradle-version 8.14
 
-      - name: Build release APK (debug-signed)
-        run: ./gradlew :app:assembleRelease --stacktrace --no-daemon
-
-      - name: Resolve tag from versionName
+      # ── 版本决策（对账双源：main 清单 + 最新 Release 资产）────────────
+      - name: Resolve version
         id: ver
-        run: |
-          set -euo pipefail
-          VERSION=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)
-          [ -n "$VERSION" ] || { echo "::error::无法解析 versionName"; exit 1; }
-          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
-          echo "📌 tag = v$VERSION"
-
-      - name: Upload APK to release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.ver.outputs.tag }}
         run: |
           set -euo pipefail
-          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
-          gh release view "$TAG" >/dev/null 2>&1 || \
-            gh release create "$TAG" --title "更新日志发布器 $TAG" \
-              --notes "自动构建：直推 main 触发。安装 release 目录下的 APK（debug 签名）。" \
-              --prerelease
-          gh release upload "$TAG" "$APK" --clobber
-          echo "✅ $APK → Release $TAG：https://github.com/${{ github.repository }}/releases/tag/$TAG"
+          REPO='${{ github.repository }}'
+
+          # 地板值（app/build.gradle.kts，格式：versionCode = ciVersionCode ?: N）
+          LOCAL_FLOOR=$(grep -oP 'versionCode\s*=\s*ciVersionCode\s*\?:\s*\K[0-9]+' app/build.gradle.kts || true)
+          [ -n "$LOCAL_FLOOR" ] || { echo "::error::无法解析 versionCode 地板"; exit 1; }
+          BASE_NAME=$(grep -oP 'versionName\s*=\s*ciVersionName\s*\?:\s*"\K[^"]+' app/build.gradle.kts || true)
+          [ -n "$BASE_NAME" ] || { echo "::error::无法解析 versionName 基名"; exit 1; }
+
+          # 远端对账源 1：main 上的 version.json
+          REMOTE_VC=$(curl -sfL "https://raw.githubusercontent.com/${REPO}/main/version.json" 2>/dev/null \
+            | jq -r '.versionCode // 0' 2>/dev/null || echo 0)
+          case "$REMOTE_VC" in ''|*[!0-9]*) REMOTE_VC=0;; esac
+
+          # 远端对账源 2：最新 Release（含预发布）挂载的 version.json 资产
+          PREV_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
+          echo "PREV_TAG=$PREV_TAG" >> "$GITHUB_ENV"
+          if [ -n "$PREV_TAG" ]; then
+            REL_VJ_URL=$(gh release view "$PREV_TAG" --json assets \
+              --jq '.assets[] | select(.name == "version.json").url' 2>/dev/null || true)
+            if [ -n "$REL_VJ_URL" ]; then
+              REL_VC=$(curl -sfL "$REL_VJ_URL" 2>/dev/null | jq -r '.versionCode // 0' 2>/dev/null || echo 0)
+              case "$REL_VC" in ''|*[!0-9]*) REL_VC=0;; esac
+              if [ "$REL_VC" -gt "$REMOTE_VC" ]; then
+                echo "::notice::main 清单落后于 Release 资产（v$REL_VC > v$REMOTE_VC）—— 以资产为准防撞号"
+                REMOTE_VC="$REL_VC"
+              fi
+            fi
+          fi
+
+          # 自增决策
+          NEXT_VC=$(( LOCAL_FLOOR > REMOTE_VC + 1 ? LOCAL_FLOOR : REMOTE_VC + 1 ))
+          VERSION_NAME="$BASE_NAME.$NEXT_VC"
+          TAG="v$VERSION_NAME"
+
+          # 上一版 versionCode（补丁 fromVersionCode：客户端补丁适用性判定）
+          PREV_VC=$(curl -sfL "https://raw.githubusercontent.com/${REPO}/main/version.json" 2>/dev/null \
+            | jq -r '.versionCode // 0' 2>/dev/null || echo 0)
+          case "$PREV_VC" in ''|*[!0-9]*) PREV_VC=0;; esac
+          # 兜底映射：v1.0.0 = versionCode 1（首个版本无清单时的已知事实）
+          if [ "$PREV_VC" -eq 0 ] && [ "$PREV_TAG" = "v1.0.0" ]; then PREV_VC=1; fi
+          echo "PREV_VC=$PREV_VC" >> "$GITHUB_ENV"
+
+          {
+            echo "next_vc=$NEXT_VC"
+            echo "version_name=$VERSION_NAME"
+            echo "tag=$TAG"
+            echo "base_name=$BASE_NAME"
+          } >> "$GITHUB_OUTPUT"
+          echo "📌 $TAG（versionCode $NEXT_VC）← 地板 $LOCAL_FLOOR / 远端 $REMOTE_VC"
+
+      # ── 签名密钥（Secrets → 仓库根 keystore.jks，不入库）────────────
+      - name: Decode signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > keystore.jks
+            echo "🔑 keystore.jks 已就位（$(wc -c < keystore.jks) bytes）"
+          else
+            echo "::warning::未配置 KEYSTORE_BASE64 —— 本次回退 debug 签名（PR 校验不断链；正式发布请配置 Secrets）"
+          fi
+
+      - name: Build release APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          ./gradlew :app:assembleRelease --stacktrace --no-daemon \
+            -PappVersionCode=${{ steps.ver.outputs.next_vc }} \
+            -PappVersionName=${{ steps.ver.outputs.version_name }}
+          ls -la app/build/outputs/apk/release/
+
+      - name: Collect artifact
+        run: |
+          set -euo pipefail
+          SRC=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          APK_NAME="Publisher-${{ steps.ver.outputs.tag }}-release.apk"
+          mkdir -p dist
+          cp "$SRC" "dist/$APK_NAME"
+          echo "APK_NAME=$APK_NAME" >> "$GITHUB_ENV"
+          echo "APK_SHA=$(sha256sum "dist/$APK_NAME" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          echo "APK_SIZE=$(stat -c%s "dist/$APK_NAME")" >> "$GITHUB_ENV"
+          echo "APK_URL=https://github.com/${{ github.repository }}/releases/download/${{ steps.ver.outputs.tag }}/$APK_NAME" >> "$GITHUB_ENV"
+          # 签名证书指纹（客户端可校验；亦可人工比对）
+          CERT_SHA=$(keytool -printcert -jarfile "dist/$APK_NAME" 2>/dev/null \
+            | grep -m1 'SHA256:' | sed 's/.*SHA256:\s*//' | tr -d ' ' | tr -d ':' | tr 'A-F' 'a-f')
+          [ ${#CERT_SHA} -eq 64 ] && echo "CERT_SHA=$CERT_SHA" >> "$GITHUB_ENV" || echo "CERT_SHA=" >> "$GITHUB_ENV"
+          echo "📦 $APK_NAME $(stat -c%s dist/$APK_NAME) bytes"
+
+      # ── 与上一版生成 xdelta3 增量补丁 ─────────────────────────────
+      - name: Generate xdelta3 patch (previous release → this)
+        id: patch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq xdelta3 >/dev/null
+          PREV_TAG="${PREV_TAG:-}"
+          if [ -z "$PREV_TAG" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"; echo "（无历史 Release —— 首发无补丁）"; exit 0
+          fi
+          PREV_APK_URL=$(gh release view "$PREV_TAG" --json assets \
+            --jq '[.assets[].url | select(test("\\.apk$"))][0]' 2>/dev/null || true)
+          if [ -z "$PREV_APK_URL" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"; echo "::warning::上一版（$PREV_TAG）无 APK 资产 —— 跳过补丁"; exit 0
+          fi
+          curl -sfL "$PREV_APK_URL" -o prev.apk
+          NEW="dist/$APK_NAME"
+          PATCH_NAME="patch_${PREV_TAG}_to_${{ steps.ver.outputs.tag }}.vcdiff"
+          # -S lzma：与发布器内置 VcdiffDecoder（.xz 二级压缩）一一对应；失败回退无二级压缩
+          if ! xdelta3 -e -f -S lzma -s prev.apk "$NEW" "dist/$PATCH_NAME"; then
+            echo "::notice::LZMA 失败，回退无二级压缩"
+            xdelta3 -e -f -s prev.apk "$NEW" "dist/$PATCH_NAME"
+          fi
+          {
+            echo "skip=false"
+            echo "name=$PATCH_NAME"
+            echo "sha=$(sha256sum dist/$PATCH_NAME | cut -d' ' -f1)"
+            echo "size=$(stat -c%s dist/$PATCH_NAME)"
+            echo "url=https://github.com/${{ github.repository }}/releases/download/${{ steps.ver.outputs.tag }}/$PATCH_NAME"
+          } >> "$GITHUB_OUTPUT"
+          echo "🔧 $PREV_TAG → ${{ steps.ver.outputs.tag }}：$(stat -c%s dist/$PATCH_NAME) bytes（$(stat -c%s dist/$PATCH_NAME | awk '{printf "%.1f", $1/1048576}') MB）"
+
+      # ── version.json（三源同稿：Release 资产 / main 提交 / Release body）──
+      - name: Compose version.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PR_TITLES=$(gh pr list --state merged --base main --limit 5 \
+            --json title --jq 'map(.title) | join("；")' 2>/dev/null || true)
+          NOTES="构建 ${{ steps.ver.outputs.version_name }}"
+          if [ -n "$PR_TITLES" ]; then NOTES="$NOTES · 近期合并：$PR_TITLES"; fi
+          echo "NOTES<<EOF" >> "$GITHUB_ENV"; echo "$NOTES" >> "$GITHUB_ENV"; echo "EOF" >> "$GITHUB_ENV"
+
+          if [ "${{ steps.patch.outputs.skip }}" = "false" ]; then
+            PATCH_JSON=$(jq -n \
+              --arg fromTag "$PREV_TAG" --argjson fromVc "${PREV_VC:-0}" \
+              --arg url "${{ steps.patch.outputs.url }}" \
+              --argjson size "${{ steps.patch.outputs.size }}" \
+              --arg sha "${{ steps.patch.outputs.sha }}" \
+              '{fromTag:$fromTag, fromVersionCode:$fromVc, url:$url, sizeBytes:$size, sha256:$sha}')
+          else
+            PATCH_JSON=null
+          fi
+
+          jq -n \
+            --arg vn "${{ steps.ver.outputs.version_name }}" \
+            --argjson vc "${{ steps.ver.outputs.next_vc }}" \
+            --arg tag "${{ steps.ver.outputs.tag }}" \
+            --arg page "https://github.com/${{ github.repository }}/releases/tag/${{ steps.ver.outputs.tag }}" \
+            --arg notes "$NOTES" \
+            --arg sha "${{ github.sha }}" \
+            --arg cert "$CERT_SHA" \
+            --arg apkUrl "$APK_URL" --argjson apkSize "$APK_SIZE" --arg apkSha "$APK_SHA" \
+            --argjson patch "$PATCH_JSON" \
+            '{
+              versionName: $vn, versionCode: $vc, tag: $tag,
+              publishedAt: (now | todate),
+              releasePage: $page,
+              notes: $notes, commitSha: $sha,
+              signingCertSha256: (if ($cert | length) == 64 then $cert else null end),
+              download: {url: $apkUrl, sizeBytes: $apkSize, sha256: $apkSha},
+              patch: $patch
+            }' > dist/version.json
+          cat dist/version.json
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ver.outputs.tag }}"
+          ASSETS=("dist/$APK_NAME" "dist/version.json")
+          PATCH_LINE="无（首发 / 上一版无 APK）"
+          if [ "${{ steps.patch.outputs.skip }}" = "false" ]; then
+            ASSETS+=("dist/${{ steps.patch.outputs.name }}")
+            PATCH_MB=$(( ${{ steps.patch.outputs.size }} / 1048576 ))
+            PATCH_LINE="${{ steps.patch.outputs.name }}（${PATCH_MB} MB，$PREV_TAG → $TAG）"
+          fi
+          BODY=$(cat <<MD
+          ## 更新日志发布器 ${{ steps.ver.outputs.version_name }}
+
+          **单仓库补丁更新**产物：
+          - 完整包：\`$APK_NAME\`（$(( APK_SIZE / 1048576 )) MB）
+          - 增量补丁：\`$PATCH_LINE\`
+          - \`version.json\`：App 内「设置 → 软件更新」即读即更（增量优先，自动回退全量）
+
+          > 从 v1.0.0（debug 签名）升级：签名已更换为正式密钥，请先卸载旧版再安装（一次性）。
+          MD
+          )
+          gh release create "$TAG" \
+            --title "更新日志发布器 ${{ steps.ver.outputs.version_name }}" \
+            --notes "$BODY" --latest \
+            "${ASSETS[@]}"
+          echo "✅ Release $TAG：https://github.com/${{ github.repository }}/releases/tag/$TAG"
+
+      # ── 提交 version.json 到 main（[skip ci] 防自触发）────────────
+      - name: Commit version.json to main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          REPO='${{ github.repository }}'
+          B64=$(base64 -w0 dist/version.json)
+          # 现有文件 → 取 sha 覆盖；首次 → 直接创建
+          SHA=$(gh api "repos/$REPO/contents/version.json?ref=main" --jq .sha 2>/dev/null || true)
+          if [ -n "$SHA" ]; then
+            gh api -X PUT "repos/$REPO/contents/version.json" \
+              -f message="chore(release): 提交 version.json ${{ steps.ver.outputs.tag }} [skip ci]" \
+              -f content="$B64" -f branch=main -f sha="$SHA" >/dev/null
+          else
+            gh api -X PUT "repos/$REPO/contents/version.json" \
+              -f message="chore(release): 提交 version.json ${{ steps.ver.outputs.tag }} [skip ci]" \
+              -f content="$B64" -f branch=main >/dev/null
+          fi
+          echo "✅ version.json → main（App 更新通道读取点）"
