@@ -1,0 +1,65 @@
+name: Build APK
+
+# 发布器自身构建：push main / 手动触发 → 构建 release APK（debug 签名）
+# → 上传到 GitHub Release（版本 tag 从 app/build.gradle.kts 的 versionName 解析）。
+# 与主仓库 apk.yml 同款姿势：仓库不含 wrapper jar，CI 现场生成。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: publisher-build
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14'
+
+      - name: Generate Gradle wrapper
+        run: gradle wrapper --gradle-version 8.14
+
+      - name: Build release APK (debug-signed)
+        run: ./gradlew :app:assembleRelease --stacktrace --no-daemon
+
+      - name: Resolve tag from versionName
+        id: ver
+        run: |
+          set -euo pipefail
+          VERSION=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)
+          [ -n "$VERSION" ] || { echo "::error::无法解析 versionName"; exit 1; }
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "📌 tag = v$VERSION"
+
+      - name: Upload APK to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --title "更新日志发布器 $TAG" \
+              --notes "自动构建：直推 main 触发。安装 release 目录下的 APK（debug 签名）。" \
+              --prerelease
+          gh release upload "$TAG" "$APK" --clobber
+          echo "✅ $APK → Release $TAG：https://github.com/${{ github.repository }}/releases/tag/$TAG"
