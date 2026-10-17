@@ -68,6 +68,27 @@ import java.util.Locale
 /** 版本号格式（与聚合端 VERSION_RE 同源）：X.Y[.Z[.N]]。 */
 private val VERSION_RE = Regex("^\\d+(\\.\\d+)+$")
 
+/** 数值比较 a > b（逐段）；任一无法解析 → null（调用方按未知降级展示）。 */
+private fun versionGt(a: String, b: String): Boolean? {
+    fun tup(v: String) = v.split(".").mapNotNull { it.toIntOrNull() }.let {
+        if (it.isEmpty()) null else it
+    }
+    val ta = tup(a.trim().removePrefix("v")) ?: return null
+    val tb = tup(b.trim().removePrefix("v")) ?: return null
+    val n = maxOf(ta.size, tb.size)
+    val pa = ta + List(n - ta.size) { 0 }
+    val pb = tb + List(n - tb.size) { 0 }
+    return pa > pb
+}
+
+/** 末段序号 +1（发版列车近似预测：1.4.9.27 → 1.4.9.28）。 */
+private fun bumpLastOrdinal(version: String): String {
+    val parts = version.split(".").toMutableList()
+    val last = parts.lastOrNull()?.toIntOrNull()
+    if (last != null) parts[parts.lastIndex] = (last + 1).toString()
+    return parts.joinToString(".")
+}
+
 /** 连接快照（AppRoot 提升持有；设置页保存即更新，主页 LaunchedEffect 重拉）。 */
 data class Connection(
     val repo: String,
@@ -342,24 +363,20 @@ fun MainScreen(
                             }
                         }
                         val hint = vs.nextHint
-                        val sameAsLatest = vs.latest != null && hint == vs.latest.versionName
-                        if (hint != null) {
-                            SpacerH(4.dp)
-                            Text(
-                                when {
-                                    sameAsLatest ->
-                                        "gradle 仍是 v$hint（未 bump）→ 下次发布自动追加构建序号（v$hint.1 起）"
-                                    vs.latest == null ->
-                                        "下版预告 v$hint（来自 gradle；发布仓库 version.json 尚未自举）"
-                                    else ->
-                                        "下版预告 v$hint（PR 已在 gradle 提前 bump）"
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        } else if (vs.latest != null) {
-                            SpacerH(4.dp)
-                            HintText("下版预告不可用（gradle versionName 提取失败）—— 可用「自定义」直接指定")
+                        val latestName = vs.latest?.versionName
+                        when {
+                            hint == null && latestName == null ->
+                                HintText("版本通道不可用 —— 点右上角刷新重试")
+                            hint == null ->
+                                HintText("下版预告不可用（gradle versionName 提取失败）—— 可用「自定义」直接指定")
+                            latestName == null ->
+                                HintText("下版预告 v$hint（来自 gradle；发布仓库 version.json 尚未自举）")
+                            hint == latestName ->
+                                HintText("gradle 仍是 v$hint（未 bump）→ 下次发布自动追加构建序号（v$hint.1 起）")
+                            versionGt(hint, latestName) == true ->
+                                HintText("下版预告 v$hint（PR 已在 gradle 提前 bump）")
+                            else ->
+                                HintText("发版列车 v$latestName 领先 gradle 默认 v$hint → 下次发布自动追加序号（约 v${bumpLastOrdinal(latestName)}）")
                         }
                     }
                 }
