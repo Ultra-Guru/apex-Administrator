@@ -39,6 +39,12 @@ android {
 
     signingConfigs {
         create("publisher") {
+            // v1/v2/v3 三方案全开（与主仓库同款）：minSdk≥24 时 AGP 默认只签 v2/v3，
+            // 无 JAR 签名块 —— CI 的 keytool -printcert -jarfile（签名指纹提取）
+            // 将读不到任何签名者而失败。v1 仅增 ~50KB，换来全工具链可验。
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
             if (ksFile != null) {
                 storeFile = ksFile
                 storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "meng411722"
