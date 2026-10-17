@@ -15,3 +15,8 @@ Thumbs.db
 
 # 本地脚本输出
 *.log
+
+# 签名密钥（走 GitHub Secrets；本地开发可放置 keystore.jks 于仓库根）
+/keystore.jks
+*.jks
+*.keystore

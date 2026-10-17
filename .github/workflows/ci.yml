@@ -1,0 +1,60 @@
+name: CI
+
+# PR / 非主干分支的快速校验（发布流水线见 build.yml：
+# PR 合并 → push main → 自动发布构件）。
+#
+# 校验项：
+# 1. Kotlin 编译（compileReleaseKotlin —— 无需密钥，debug 签名回退不断链）；
+# 2. Android Lint（lintRelease）；
+# 3. 版本地板完整性 —— release.yml 依赖两条 grep 正则
+#    （versionCode = ciVersionCode ?: N / versionName = ciVersionName ?: "X.Y.Z"），
+#    此处守护其始终可解析，防止发版流水线在版本决策步骤崩盘。
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Compile · Lint · Version sanity
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Generate Gradle wrapper
+        run: gradle wrapper --gradle-version 9.3.1
+
+      - name: Version floor sanity
+        run: |
+          set -euo pipefail
+          FLOOR_VC=$(grep -oP 'versionCode\s*=\s*ciVersionCode\s*\?:\s*\K[0-9]+' app/build.gradle.kts || true)
+          FLOOR_VN=$(grep -oP 'versionName\s*=\s*ciVersionName\s*\?:\s*"\K[^"]+' app/build.gradle.kts || true)
+          [ -n "$FLOOR_VC" ] || { echo "::error::versionCode 地板不可解析 —— release.yml 的版本决策将失败"; exit 1; }
+          [ -n "$FLOOR_VN" ] || { echo "::error::versionName 基名不可解析 —— release.yml 的版本决策将失败"; exit 1; }
+          echo "✅ 版本地板：versionCode ≥ $FLOOR_VC，versionName 基名 $FLOOR_VN"
+
+      - name: Compile (release Kotlin)
+        run: ./gradlew :app:compileReleaseKotlin --stacktrace --no-daemon
+
+      - name: Lint (release)
+        run: ./gradlew :app:lintRelease --no-daemon

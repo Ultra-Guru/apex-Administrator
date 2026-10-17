@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 单色层（Android 13+ 主题图标）：日志清单笔触 + 撰写笔尖，
+     安全区（中心 66dp）内设计 —— 与 App「更新日志发布器」语义一致。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:pathData="M35,42 h27" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:pathData="M35,55 h19" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:pathData="M35,68 h11" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M62,77 l14,-14 l6,6 l-14,14 l-9,3 z" />
+</vector>

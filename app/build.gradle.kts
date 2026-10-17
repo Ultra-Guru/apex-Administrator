@@ -7,22 +7,55 @@ plugins {
 
 android {
     namespace = "com.apex.changelog.publisher"
-    compileSdk = 35
+    // backdrop / shapes / Compose 1.12.x 的 AAR 元数据均要求 minCompileSdk 37；
+    // 字符串哈希形式（AGP 9.1 验证过的写法）+ gradle.properties 里的
+    // suppressUnsupportedCompileSdk / overridePathCheck 双开关。
+    compileSdkVersion("android-37.0")
 
     defaultConfig {
+        // applicationId 不变 —— 已安装的发布器直接收到覆盖更新（含补丁更新）。
         applicationId = "com.apex.changelog.publisher"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        targetSdk = 36
+
+        // 版本地板值：CI 发版流水线会用 -PappVersionCode/-PappVersionName
+        // 覆盖（versionCode = max(远端 version.json, 地板) 自增 —— 防撞号，
+        // 与主仓库同款对账逻辑；versionName 由流水线追加构建序号）。
+        val ciVersionCode = providers.gradleProperty("appVersionCode").orElse("").get().toIntOrNull()
+        val ciVersionName = providers.gradleProperty("appVersionName").orElse("").get().ifBlank { null }
+        versionCode = ciVersionCode ?: 2
+        versionName = ciVersionName ?: "2.0.0"
+    }
+
+    // ── 签名（meng411722）────────────────────────────────────────────
+    // 密钥文件走 GitHub Secrets（KEYSTORE_BASE64 → CI 解码为仓库根 keystore.jks，
+    // 不入库）；密码/别名经 env 注入，本地兜底值仅配合本地 keystore.jks 使用 ——
+    // 密钥文件本身才是秘密，密码字面量无密钥文件时不可利用。
+    // 无密钥时回退 debug 签名（PR 校验构建 / 本地开发不断链）。
+    val ksFile: File? = listOfNotNull(
+        System.getenv("KEYSTORE_FILE")?.let(::File),
+        rootProject.file("keystore.jks")
+    ).firstOrNull { it.exists() }
+
+    signingConfigs {
+        create("publisher") {
+            if (ksFile != null) {
+                storeFile = ksFile
+                storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "meng411722"
+                keyAlias = System.getenv("KEY_ALIAS") ?: "meng411722"
+                keyPassword = System.getenv("KEY_PASSWORD") ?: "meng411722"
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            // 个人管理端工具：发布 APK 以 debug 密钥签名（与主仓库发布链路同款
-            // 语义 —— 产物可直接安装；本应用不进应用商店、无签名升级诉求）。
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (ksFile != null) {
+                signingConfigs.getByName("publisher")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 
@@ -30,27 +63,45 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
     buildFeatures {
         compose = true
     }
 }
 
+kotlin {
+    compilerOptions {
+        // 全限定引用，避免脚本顶部 import 位置歧义
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
+    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
     implementation(composeBom)
+
+    // Compose
     implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
-    implementation("androidx.activity:activity-compose:1.9.3")
-    implementation("androidx.core:core-ktx:1.15.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    // material3 1.12 不再传递 animation-core —— animateFloatAsState/spring 所在构件，显式声明
+    implementation("androidx.compose.animation:animation-core")
+
+    // 液态玻璃（最先进的 Compose 液态玻璃库：Kyant0 Backdrop）。
+    // backdrop 对 shapes 是 implementation 级依赖（不传递到编译类路径），
+    // 代码直接 import com.kyant.shapes.* —— 必须显式声明。
+    implementation("io.github.kyant0:backdrop:2.0.1")
+    implementation("io.github.kyant0:shapes:1.2.1")
+
+    // AndroidX
+    implementation("androidx.activity:activity-compose:1.13.0")
+    implementation("androidx.core:core-ktx:1.19.1")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
+
+    // 网络 / 序列化
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
-    debugImplementation("androidx.compose.ui:ui-tooling")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
+
+    // 单仓库补丁更新：VCDIFF（xdelta3）补丁的 LZMA(.xz) 二级压缩段解码
+    implementation("org.tukaani:xz:1.12")
 }
