@@ -7,8 +7,10 @@ plugins {
 
 android {
     namespace = "com.apex.changelog.publisher"
-    // backdrop / shapes / Compose 1.12.x 的 AAR 元数据均要求 minCompileSdk 37
-    compileSdk = 37
+    // backdrop / shapes / Compose 1.12.x 的 AAR 元数据均要求 minCompileSdk 37；
+    // 字符串哈希形式（AGP 9.1 验证过的写法）+ gradle.properties 里的
+    // suppressUnsupportedCompileSdk / overridePathCheck 双开关。
+    compileSdkVersion("android-37.0")
 
     defaultConfig {
         // applicationId 不变 —— 已安装的发布器直接收到覆盖更新（含补丁更新）。
