@@ -78,7 +78,10 @@ private fun versionGt(a: String, b: String): Boolean? {
     val n = maxOf(ta.size, tb.size)
     val pa = ta + List(n - ta.size) { 0 }
     val pb = tb + List(n - tb.size) { 0 }
-    return pa > pb
+    for (i in 0 until n) {
+        if (pa[i] != pb[i]) return pa[i] > pb[i]
+    }
+    return false
 }
 
 /** 末段序号 +1（发版列车近似预测：1.4.9.27 → 1.4.9.28）。 */
