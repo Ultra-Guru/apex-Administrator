@@ -3,13 +3,20 @@ package com.apex.changelog.publisher.ui
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -18,10 +25,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -43,6 +52,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -51,28 +63,34 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import com.apex.changelog.publisher.data.BackgroundStore
 import com.apex.changelog.publisher.data.GitHubApi
 import com.apex.changelog.publisher.data.PublisherPrefs
 import com.apex.changelog.publisher.data.SelfUpdate
+import com.apex.changelog.publisher.ui.glass.BackgroundStyle
 import com.apex.changelog.publisher.ui.glass.GlassButton
 import com.apex.changelog.publisher.ui.glass.GlassCard
 import com.apex.changelog.publisher.ui.glass.GlassEntrance
 import com.apex.changelog.publisher.ui.glass.GlassIconButton
 import com.apex.changelog.publisher.ui.glass.GlassTextField
+import com.apex.changelog.publisher.ui.glass.GradientPresets
 import com.apex.changelog.publisher.ui.glass.SpacerH
 import com.apex.changelog.publisher.ui.glass.SpacerW
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * 设置页 —— 连接配置（目标仓库 / 分支 / Token）+ 发布器自更新卡。
+ * 设置页 —— 背景与玻璃 + 连接配置（目标仓库 / 分支 / Token）+ 发布器自更新卡。
  *
- * v2.1：
- * - Token 输入不再使用密码键盘（KeyboardType.Ascii）—— 不触发系统安全键盘，
- *   剪贴板粘贴可用；另配「粘贴」快捷键直读剪贴板（部分 IME 禁长按粘贴的兜底）；
- * - 连接字段间距 / FlowRow 防溢出 / imePadding / 状态机 AnimatedContent 过渡；
- * - Token 指引同时覆盖 classic（ghp_，repo scope）与 fine-grained 两种令牌。
+ * v2.2：新增「背景与玻璃」卡（用户核心需求）：
+ * - 五套漂移预设（极光/深海/落日/兰紫/石墨）圆形色卡即点即切；
+ * - 相册自定义图片（Photo Picker → 有界解码落盘 → Ken Burns 缓推背景）；
+ * - 玻璃联动：换背景即换玻璃 —— 表面色/流光色/折射强度随背景主色与
+ *   对比度自动调谐（BackgroundStore 分析，AppRoot 全局注入）。
  *
+ * v2.1：Token 输入不触发安全键盘（Ascii）+「粘贴」直读剪贴板；
  * 自更新（单仓库补丁更新）：version.json 由发版流水线提交到本仓库 main；
  * 补丁 = xdelta3 VCDIFF（App 内合成，无命令行）；SHA-256 全链对账。
  */
@@ -81,29 +99,230 @@ fun SettingsScreen(
     backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
     updateState: UpdateUiState,
     onUpdateState: (UpdateUiState) -> Unit,
-    onConnectionChanged: (repo: String, branch: String, token: String) -> Unit
+    onConnectionChanged: (repo: String, branch: String, token: String) -> Unit,
+    onBackgroundChange: (BackgroundStyle) -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .navigationBarsPadding()
+            .statusBarsPadding()
             .imePadding()
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        // ── 页内标题（v2.2：顶栏退役，dark 底部导航接管页面切换）──
         GlassEntrance(delayMillis = 0) {
+            Column {
+                Text(
+                    "设置",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                SpacerH(2.dp)
+                Text(
+                    "背景 · 连接 · Token · 软件更新",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
+        }
+        GlassEntrance(delayMillis = 40) {
+            BackgroundCard(
+                backdrop = backdrop,
+                onBackgroundChange = onBackgroundChange
+            )
+        }
+        GlassEntrance(delayMillis = 80) {
             UpdateCard(backdrop = backdrop, state = updateState, setState = onUpdateState)
         }
-        GlassEntrance(delayMillis = 60) {
+        GlassEntrance(delayMillis = 120) {
             ConnectionCard(backdrop = backdrop, onConnectionChanged = onConnectionChanged)
         }
-        GlassEntrance(delayMillis = 120) {
+        GlassEntrance(delayMillis = 160) {
             TokenGuideCard(backdrop = backdrop)
         }
-        GlassEntrance(delayMillis = 180) {
+        GlassEntrance(delayMillis = 200) {
             LinksCard(backdrop = backdrop)
         }
+    }
+}
+
+// ── 背景与玻璃卡（v2.2）──────────────────────────────────────────────────
+
+/**
+ * 背景自定义：预设色卡 + 相册图片。切换即生效（AppRoot 持有背景单一
+ * 事实源，LocalGlassTuning 全局注入）—— 玻璃的折射与流光随之变色。
+ */
+@Composable
+private fun BackgroundCard(
+    backdrop: com.kyant.backdrop.backdrops.LayerBackdrop,
+    onBackgroundChange: (BackgroundStyle) -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var current by remember {
+        mutableStateOf(BackgroundStyle.fromKey(PublisherPrefs.backgroundStyle(context)))
+    }
+    var importing by remember { mutableStateOf(false) }
+
+    // 相册选图：Photo Picker（无需存储权限）→ 有界解码落盘 → 切 Image 风格
+    val imagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        importing = true
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) { BackgroundStore.saveImage(context, uri) }
+            importing = false
+            if (ok) {
+                current = BackgroundStyle.Image
+                onBackgroundChange(BackgroundStyle.Image)
+            } else {
+                Toast.makeText(context, "图片导入失败 —— 换一张试试", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    fun pick(style: BackgroundStyle) {
+        current = style
+        PublisherPrefs.saveBackgroundStyle(context, style.key)
+        onBackgroundChange(style)
+    }
+
+    GlassCard(backdrop = backdrop, modifier = Modifier.fillMaxWidth()) {
+        Text(
+            "背景与玻璃",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        SpacerH(2.dp)
+        Text(
+            "液态玻璃的折射与流光随背景自动调色",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.outline
+        )
+        SpacerH(12.dp)
+
+        // ── 预设色卡行：极光 / 深海 / 落日 / 兰紫 / 石墨 ──
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            GradientPresets.all.forEach { preset ->
+                val selected = when (val c = current) {
+                    is BackgroundStyle.Preset -> c.presetKey == preset.key
+                    BackgroundStyle.Aurora -> preset.key == GradientPresets.Aurora.key
+                    BackgroundStyle.Image -> false
+                }
+                val targetStyle = if (preset.key == GradientPresets.Aurora.key) {
+                    BackgroundStyle.Aurora
+                } else {
+                    BackgroundStyle.Preset(preset.key)
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(
+                                Brush.linearGradient(
+                                    listOf(
+                                        preset.blobsLight[0],
+                                        preset.blobsLight[1],
+                                        preset.blobsLight[2]
+                                    )
+                                )
+                            )
+                            .border(
+                                width = if (selected) 2.5.dp else 1.dp,
+                                color = if (selected) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+                                shape = CircleShape
+                            )
+                            .clickable(enabled = true) { pick(targetStyle) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (selected) {
+                            Icon(
+                                Icons.Outlined.CheckCircle,
+                                contentDescription = "已选" + preset.label,
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                    SpacerH(4.dp)
+                    Text(
+                        preset.label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (selected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outline
+                    )
+                }
+            }
+        }
+        SpacerH(12.dp)
+
+        // ── 相册图片 ──
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            GlassButton(
+                onClick = {
+                    imagePicker.launch(
+                        PickVisualMediaRequest(
+                            ActivityResultContracts.PickVisualMedia.ImageOnly
+                        )
+                    )
+                },
+                backdrop = backdrop,
+                enabled = !importing,
+                height = 44.dp,
+                tint = MaterialTheme.colorScheme.primary,
+                fill = MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)
+            ) {
+                if (importing) {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        modifier = Modifier.height(16.dp).width(16.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                }
+                Text(
+                    if (importing) "导入中…" else "从相册选背景图",
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            if (current is BackgroundStyle.Image) {
+                GlassButton(
+                    onClick = {
+                        BackgroundStore.clear(context)
+                        pick(BackgroundStyle.Aurora)
+                    },
+                    backdrop = backdrop,
+                    height = 44.dp
+                ) {
+                    Text(
+                        "移除图片",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+        }
+        SpacerH(4.dp)
+        Text(
+            if (current is BackgroundStyle.Image) {
+                "已启用自定义背景 —— 玻璃的表面色 / 流光 / 折射强度已按背景主色与对比度自动调谐"
+            } else {
+                "选图片或点色卡即换背景；玻璃的折射、流光与色温会随背景实时变化"
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.outline
+        )
     }
 }
 

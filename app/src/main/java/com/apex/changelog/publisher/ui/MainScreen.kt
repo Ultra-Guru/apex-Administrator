@@ -14,8 +14,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -121,6 +121,9 @@ private sealed interface VersionStatus {
  *
  * v2.1：版本定位卡（填完 Token 自动拉线上最新 + 下版预告，可选下一版 / 自定义
  * 未来版）；全局液态玻璃性能分级 + 级联入场；布局修复（imePadding / FlowRow）。
+ *
+ * v2.2：顶部改页内标题（顶栏退役 —— dark 底部导航接管页面切换）；
+ * 两级日志语义提示更新（一级手动 / 二级 PR，主 App 弹窗「下一步」式展示）。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -198,7 +201,7 @@ fun MainScreen(
     fun send() {
         if (sending) return
         if (!connection.ready) {
-            result = SendResult.Failure("尚未配置 Token —— 点右上角设置，填入 GitHub token（Contents: Read and write）")
+            result = SendResult.Failure("尚未配置 Token —— 去底部导航「设置」页，填入 GitHub token（Contents: Read and write）")
             return
         }
         val content = body.trim()
@@ -272,11 +275,29 @@ fun MainScreen(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .navigationBarsPadding()
+            .statusBarsPadding()
             .imePadding()
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        // ── 页内标题（v2.2：顶栏退役，dark 底部导航接管页面切换）──
+        GlassEntrance(delayMillis = 0) {
+            Column {
+                Text(
+                    "更新日志发布器",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                SpacerH(2.dp)
+                Text(
+                    "写好即发 —— 提交即触发发版流水线",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
+        }
+
         // ── 更新可用横幅（单仓库补丁更新通道）────────────────────────
         AnimatedVisibility(
             visible = updateState is UpdateUiState.Available,
@@ -369,7 +390,7 @@ fun MainScreen(
                         val latestName = vs.latest?.versionName
                         when {
                             hint == null && latestName == null ->
-                                HintText("版本通道不可用 —— 点右上角刷新重试")
+                                HintText("版本通道不可用 —— 点版本卡右上角刷新重试")
                             hint == null ->
                                 HintText("下版预告不可用（gradle versionName 提取失败）—— 可用「自定义」直接指定")
                             latestName == null ->
@@ -423,7 +444,7 @@ fun MainScreen(
                 }
                 if (!targetCustom) {
                     SpacerH(6.dp)
-                    HintText("不写 target —— 下次发布即收录，聚合端按来源分为一级（发布器）/ 二级（PR）")
+                    HintText("不写 target —— 下次发布即收录；主 App 弹窗分两步：你的手动日志 →「下一步」→ PR 功能变更")
                 }
             }
         }
@@ -459,7 +480,7 @@ fun MainScreen(
                 }
                 SpacerH(6.dp)
                 when {
-                    !connection.ready -> HintText("先去右上角设置页配置 Token")
+                    !connection.ready -> HintText("先去底部导航「设置」页配置 Token")
                     staged == null -> HintText("加载中…")
                     staged!!.isEmpty() -> HintText("暂无片段 —— 下一版将使用兜底文案；写一条吧")
                     else -> {
@@ -577,7 +598,7 @@ fun MainScreen(
                                     if (r.target != null) {
                                         append("本条面向 v${r.target} —— 构建未到该版本时缓发布，到版即自动置顶展示。")
                                     } else {
-                                        append("新版上线后，主 App 升级首启即弹窗展示本条日志（一级置顶）。")
+                                        append("新版上线后，主 App 升级首启即弹窗：第一步展示本条手动日志，点「下一步」看 PR 功能变更。")
                                     }
                                 },
                                 style = MaterialTheme.typography.bodySmall,
@@ -642,7 +663,7 @@ fun MainScreen(
                                     )
                                     SpacerW(4.dp)
                                     Text(
-                                        "去右上角「设置」填入 Token",
+                                        "去底部导航「设置」填入 Token",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )

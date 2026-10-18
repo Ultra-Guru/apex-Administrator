@@ -27,6 +27,7 @@ object PublisherPrefs {
     private const val KEY_BRANCH = "branch"
     private const val KEY_TOKEN = "token"
     private const val KEY_HISTORY = "history"
+    private const val KEY_BACKGROUND = "background_style"
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -48,6 +49,17 @@ object PublisherPrefs {
             .putString(KEY_REPO, repo.trim())
             .putString(KEY_BRANCH, branch.trim())
             .putString(KEY_TOKEN, token.trim())
+            .apply()
+    }
+
+    /** 背景风格 key（null = 默认极光；见 ui.glass.BackgroundStyle）。 */
+    fun backgroundStyle(context: Context): String? =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_BACKGROUND, null)
+
+    fun saveBackgroundStyle(context: Context, key: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_BACKGROUND, key)
             .apply()
     }
 

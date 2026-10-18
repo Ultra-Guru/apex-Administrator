@@ -22,12 +22,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -36,14 +33,18 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
@@ -64,30 +65,66 @@ import com.kyant.shapes.Capsule
 import com.kyant.shapes.RoundedRectangle
 
 /**
- * 全局液态玻璃设计系统 —— 基于 Kyant0 Backdrop（io.github.kyant0:backdrop，
- * Compose 最先进的液态玻璃库）。
+ * ═══════════════════════════════════════════════════════════════════════════
+ *  全局液态玻璃设计系统 —— Kyant0 Backdrop（Compose 最先进的液态玻璃库）
+ * ═══════════════════════════════════════════════════════════════════════════
  *
- * v2.1 性能分级（卡顿根治）：折射（lens，API 33+，最贵）仅保留在「英雄面」
- * —— 顶栏与主按钮；卡片 / 输入框 / 图标钮只用 blur（API 31+）+ vibrancy。
- * 同屏 N 面玻璃 × 每帧重渲染是 v2.0 卡顿主因，配合壁纸 24fps 节流后
- * 常规交互帧不再全量重渲染玻璃面。
+ * v2.2 动态玻璃 + 背景联动折射（本轮用户需求核心）：
+ * - **流光扫掠**（[drawSheenSweep]）：全部玻璃面共有一道斜向光带随
+ *   [LocalGlassClock] 缓慢扫过（9s 周期，24fps）—— 纯 onDrawSurface
+ *   渐变绘制，任意 API 级别可见（不依赖 RenderEffect），与折射叠加
+ *   呈现「光在玻璃上流动」的液态质感；
+ * - **背景联动**：表面色 / 流光色 / 折射强度全部读 [LocalGlassTuning]
+ *   （背景派生），换背景 = 换玻璃 —— 极光 / 深海 / 落日 / 相册图各异；
+ * - **性能分级收敛**：lens 折射只保留英雄面（dark 底部导航栏）；卡片 /
+ *   按钮 / 输入框仅 blur + vibrancy + 流光 —— 同屏 N 面玻璃的
+ *   RenderEffect 负载较 v2.1 再降（按钮去 lens 是最大单项）。
  *
- * v2.1 动态：[GlassEntrance] 级联入场（淡入+上滑+微缩放，一次性）；
- * 所有可按面（按钮 / 图标钮）弹簧缩放反馈 —— 全局「呼吸感」。
+ * v2.1 保留：级联入场（[GlassEntrance]）+ 按压弹簧缩放 —— 「液面呼吸感」。
  */
-object GlassDefaults {
 
-    fun cardTint(dark: Boolean): Color =
-        if (dark) Color.Black.copy(alpha = 0.26f) else Color.White.copy(alpha = 0.15f)
+/**
+ * 流光扫掠 —— 玻璃面上的斜向光带（主带 + 弱拖尾），随 [clock] 相位 0..1
+ * 横向扫过。时钟为 null（预览/降级）或折射强度近零时静默跳过，零开销。
+ * 在 onDrawSurface 内调用 —— 读 State 触发的仅是重绘（不重组不重测量）。
+ */
+internal fun DrawScope.drawSheenSweep(
+    clock: State<Float>?,
+    sheen: Color,
+    refraction: Float
+) {
+    if (clock == null || refraction <= 0.02f) return
+    val t = clock.value
+    val w = size.width
+    val h = size.height
+    if (w <= 0f || h <= 0f) return
+    val band = w * 0.75f
+    val x = -band + (w + 2f * band) * t
 
-    fun barTint(dark: Boolean): Color =
-        if (dark) Color.Black.copy(alpha = 0.32f) else Color.White.copy(alpha = 0.22f)
-
-    fun fieldTint(dark: Boolean): Color =
-        if (dark) Color.Black.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.12f)
+    // 主光带（对角）
+    drawRect(
+        brush = Brush.linearGradient(
+            0f to Color.Transparent,
+            0.5f to sheen.copy(alpha = (0.16f * refraction).coerceIn(0.02f, 0.22f)),
+            1f to Color.Transparent,
+            start = Offset(x, 0f),
+            end = Offset(x + band, h)
+        )
+    )
+    // 弱拖尾（错开 55% 带宽 —— 双带交叠出「液面波光」层次）
+    val x2 = x - band * 0.55f
+    drawRect(
+        brush = Brush.linearGradient(
+            0f to Color.Transparent,
+            0.5f to sheen.copy(alpha = (0.07f * refraction).coerceIn(0.01f, 0.10f)),
+            1f to Color.Transparent,
+            start = Offset(x2, 0f),
+            end = Offset(x2 + band, h)
+        )
+    )
 }
 
-/** 通用玻璃卡片容器（数量最多 —— 不用 lens，仅 blur，性能优先）。 */
+/** 通用玻璃卡片容器（数量最多 —— 不用 lens，仅 blur + 流光，性能优先）。 */
 @Composable
 fun GlassCard(
     backdrop: LayerBackdrop,
@@ -98,7 +135,9 @@ fun GlassCard(
     content: @Composable ColumnScope.() -> Unit
 ) {
     val dark = isSystemInDarkTheme()
-    val surface = if (tint.isSpecified) tint else GlassDefaults.cardTint(dark)
+    val tuning = LocalGlassTuning.current
+    val clock = LocalGlassClock.current
+    val surface = if (tint.isSpecified) tint else tuning.cardTint(dark)
     Column(
         modifier
             .drawBackdrop(
@@ -123,7 +162,10 @@ fun GlassCard(
                         color = Color.Black.copy(alpha = if (dark) 0.28f else 0.07f)
                     )
                 },
-                onDrawSurface = { drawRect(surface) }
+                onDrawSurface = {
+                    drawRect(surface)
+                    drawSheenSweep(clock, tuning.sheen(dark), tuning.refraction)
+                }
             )
             .padding(padding),
         content = content
@@ -131,8 +173,9 @@ fun GlassCard(
 }
 
 /**
- * 玻璃按钮（胶囊形，按压缩放 + 色相推移可选）。
+ * 玻璃按钮（胶囊形，按压缩放 + 流光）。
  * tint/fill 同时为 Unspecified 时为「素玻璃」按钮（次级操作用）。
+ * v2.2：去 lens（性能 —— 主屏按钮数量最多），动态感由流光 + 按压承载。
  */
 @Composable
 fun GlassButton(
@@ -145,6 +188,9 @@ fun GlassButton(
     height: Dp = 52.dp,
     content: @Composable RowScope.() -> Unit
 ) {
+    val dark = isSystemInDarkTheme()
+    val tuning = LocalGlassTuning.current
+    val clock = LocalGlassClock.current
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
@@ -163,7 +209,6 @@ fun GlassButton(
                 effects = {
                     vibrancy()
                     blur(3f.dp.toPx())
-                    lens(12f.dp.toPx(), 26f.dp.toPx())
                 },
                 highlight = { Highlight.Default },
                 shadow = {
@@ -190,6 +235,7 @@ fun GlassButton(
                     if (effFill.isSpecified) {
                         drawRect(effFill)
                     }
+                    drawSheenSweep(clock, tuning.sheen(dark), tuning.refraction)
                 }
             )
             .clickable(
@@ -208,8 +254,7 @@ fun GlassButton(
 }
 
 /**
- * 玻璃图标按钮（顶栏动作 / 小型操作）—— v2.1：按压弹簧缩放反馈；
- * 小面不用 lens（性能分级：仅 blur），点击面动态感由此来。
+ * 玻璃图标按钮（小型操作）—— 按压弹簧缩放 + 流光；小面不用 lens。
  */
 @Composable
 fun GlassIconButton(
@@ -222,6 +267,8 @@ fun GlassIconButton(
     size: Dp = 44.dp
 ) {
     val dark = isSystemInDarkTheme()
+    val tuning = LocalGlassTuning.current
+    val clock = LocalGlassClock.current
     val effectiveTint = if (tint.isSpecified) tint else MaterialTheme.colorScheme.onSurface
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
@@ -248,7 +295,10 @@ fun GlassIconButton(
                     scaleX = scale
                     scaleY = scale
                 },
-                onDrawSurface = { drawRect(GlassDefaults.barTint(dark)) }
+                onDrawSurface = {
+                    drawRect(tuning.barTint(dark))
+                    drawSheenSweep(clock, tuning.sheen(dark), tuning.refraction)
+                }
             )
             .size(size)
             .clickable(
@@ -264,72 +314,19 @@ fun GlassIconButton(
     }
 }
 
-/** 浮动胶囊玻璃顶栏（iOS 26 风格：悬浮于内容之上，边缘留白）。 */
+/** 玻璃返回按钮（次级页头部用 —— 需要时备用）。 */
 @Composable
-fun GlassTopBar(
+fun GlassBackButton(
+    onClick: () -> Unit,
     backdrop: LayerBackdrop,
-    title: String,
-    modifier: Modifier = Modifier,
-    subtitle: String? = null,
-    onBack: (() -> Unit)? = null,
-    actions: @Composable RowScope.() -> Unit = {}
+    contentDescription: String = "返回"
 ) {
-    val dark = isSystemInDarkTheme()
-    Row(
-        modifier
-            .fillMaxWidth()
-            .statusBarsPadding()
-            .padding(start = 16.dp, end = 16.dp, top = 8.dp)
-            .drawBackdrop(
-                backdrop = backdrop,
-                shape = { Capsule() },
-                effects = {
-                    vibrancy()
-                    blur(10f.dp.toPx())
-                    lens(10f.dp.toPx(), 24f.dp.toPx())
-                },
-                highlight = { Highlight.Default },
-                innerShadow = {
-                    InnerShadow(radius = 12.dp, offset = DpOffset(0.dp, 6.dp))
-                },
-                shadow = {
-                    Shadow(
-                        radius = 18.dp,
-                        offset = DpOffset(0.dp, 6.dp),
-                        color = Color.Black.copy(alpha = if (dark) 0.40f else 0.10f)
-                    )
-                },
-                onDrawSurface = { drawRect(GlassDefaults.barTint(dark)) }
-            )
-            .padding(horizontal = 10.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (onBack != null) {
-            GlassIconButton(
-                onClick = onBack,
-                backdrop = backdrop,
-                icon = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "返回"
-            )
-            SpacerW(10.dp)
-        }
-        Column(Modifier.weight(1f)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-            if (subtitle != null) {
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline
-                )
-            }
-        }
-        actions()
-    }
+    GlassIconButton(
+        onClick = onClick,
+        backdrop = backdrop,
+        icon = androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack,
+        contentDescription = contentDescription
+    )
 }
 
 /** 玻璃输入框：玻璃卡承载 + 透明填充的 OutlinedTextField。 */
@@ -354,7 +351,7 @@ fun GlassTextField(
         backdrop = backdrop,
         modifier = modifier,
         cornerRadius = 22.dp,
-        tint = GlassDefaults.fieldTint(dark),
+        tint = LocalGlassTuning.current.fieldTint(dark),
         padding = PaddingValues(6.dp)
     ) {
         OutlinedTextField(

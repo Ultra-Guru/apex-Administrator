@@ -24,7 +24,7 @@ android {
         val ciVersionCode = providers.gradleProperty("appVersionCode").orElse("").get().toIntOrNull()
         val ciVersionName = providers.gradleProperty("appVersionName").orElse("").get().ifBlank { null }
         versionCode = ciVersionCode ?: 2
-        versionName = ciVersionName ?: "2.0.0"
+        versionName = ciVersionName ?: "2.1.0"
     }
 
     // ── 签名（meng411722）────────────────────────────────────────────
