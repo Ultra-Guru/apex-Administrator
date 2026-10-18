@@ -314,21 +314,6 @@ fun GlassIconButton(
     }
 }
 
-/** 玻璃返回按钮（次级页头部用 —— 需要时备用）。 */
-@Composable
-fun GlassBackButton(
-    onClick: () -> Unit,
-    backdrop: LayerBackdrop,
-    contentDescription: String = "返回"
-) {
-    GlassIconButton(
-        onClick = onClick,
-        backdrop = backdrop,
-        icon = androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack,
-        contentDescription = contentDescription
-    )
-}
-
 /** 玻璃输入框：玻璃卡承载 + 透明填充的 OutlinedTextField。 */
 @Composable
 fun GlassTextField(
