@@ -41,7 +41,7 @@ object ImageKit {
     }.getOrNull()
 
     /**
-     * 上传前压缩：最长边 ≤ 1600px + JPEG 85，输出 `cacheDir/upload/*.jpg`。
+     * 上传前压缩：最长边 ≤ 1600px + JPEG 85，输出到 cacheDir/upload/ 下的 .jpg。
      * 解码失败（损坏文件 / 前台被杀）回退原文件直传 —— 发布列车不断。
      */
     fun compress(context: Context, source: File): File = runCatching {
