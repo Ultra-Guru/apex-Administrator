@@ -1,22 +1,22 @@
 {
-  "versionName": "2.1.0.5",
-  "versionCode": 5,
-  "tag": "v2.1.0.5",
-  "publishedAt": "2026-10-18T07:00:51Z",
-  "releasePage": "https://github.com/Ultra-Guru/apex-Administrator/releases/tag/v2.1.0.5",
-  "notes": "构建 2.1.0.5 · 近期合并：fix(release): 签名指纹提取容错 + v1/v2/v3 三方案全开；feat(v2): 全局液态玻璃 + 单仓库补丁更新 + 正式签名 + PR/CI 工作流",
-  "commitSha": "67aef882835f15896791f08ea4f2c2dce01df96a",
+  "versionName": "2.2.0.6",
+  "versionCode": 6,
+  "tag": "v2.2.0.6",
+  "publishedAt": "2026-10-24T13:53:14Z",
+  "releasePage": "https://github.com/Ultra-Guru/apex-Administrator/releases/tag/v2.2.0.6",
+  "notes": "构建 2.2.0.6 · 近期合并：fix(release): 签名指纹提取容错 + v1/v2/v3 三方案全开；feat(v2): 全局液态玻璃 + 单仓库补丁更新 + 正式签名 + PR/CI 工作流",
+  "commitSha": "5231d9bcd48c2c6902fb4dbdb67de951619f281f",
   "signingCertSha256": "401f375b4697eab5dfde8888ba83f790be8b15d2f84e959ea431abfbddcc3865",
   "download": {
-    "url": "https://github.com/Ultra-Guru/apex-Administrator/releases/download/v2.1.0.5/ApexAdministrator-v2.1.0.5-release.apk",
-    "sizeBytes": 13377576,
-    "sha256": "0aa0eb2e6e14f76a7e385afe11a5fd14701bcb6d2242ede1326a8e8fbb2fc932"
+    "url": "https://github.com/Ultra-Guru/apex-Administrator/releases/download/v2.2.0.6/ApexAdministrator-v2.2.0.6-release.apk",
+    "sizeBytes": 13410338,
+    "sha256": "e7c04a292434a751613707605201c5bbb8d9caa1ddb69317b12b5505022b4457"
   },
   "patch": {
-    "fromTag": "v2.0.0.4",
-    "fromVersionCode": 4,
-    "url": "https://github.com/Ultra-Guru/apex-Administrator/releases/download/v2.1.0.5/patch_v2.0.0.4_to_v2.1.0.5.vcdiff",
-    "sizeBytes": 12507884,
-    "sha256": "4b49168562781d83e78d32747547bbe634af386707f56d93f987edf9679ec93f"
+    "fromTag": "v2.1.0.5",
+    "fromVersionCode": 5,
+    "url": "https://github.com/Ultra-Guru/apex-Administrator/releases/download/v2.2.0.6/patch_v2.1.0.5_to_v2.2.0.6.vcdiff",
+    "sizeBytes": 12538224,
+    "sha256": "cac4590461590fef37bbcd428aa9f42649de86258562b917096e93978a1fb017"
   }
 }
