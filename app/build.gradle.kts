@@ -23,8 +23,8 @@ android {
         // 与主仓库同款对账逻辑；versionName 由流水线追加构建序号）。
         val ciVersionCode = providers.gradleProperty("appVersionCode").orElse("").get().toIntOrNull()
         val ciVersionName = providers.gradleProperty("appVersionName").orElse("").get().ifBlank { null }
-        versionCode = ciVersionCode ?: 2
-        versionName = ciVersionName ?: "2.1.0"
+        versionCode = ciVersionCode ?: 3
+        versionName = ciVersionName ?: "2.2.0"
     }
 
     // ── 签名（meng411722）────────────────────────────────────────────

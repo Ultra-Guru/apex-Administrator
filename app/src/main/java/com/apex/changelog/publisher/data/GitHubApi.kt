@@ -2,6 +2,7 @@ package com.apex.changelog.publisher.data
 
 import android.util.Base64
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -75,6 +76,50 @@ class GitHubApi(private val token: String) {
 
     @Serializable
     private data class PutResponse(val commit: CommitRef? = null)
+
+    /** 多文件原子提交单元：仓库相对路径 + 原始字节（片段 .md 与配图 .jpg 同构）。 */
+    data class FileUpload(val path: String, val bytes: ByteArray)
+
+    // ── Git Data API DTO（多文件原子提交）───────────────────────────
+
+    @Serializable
+    private data class GitObject(val sha: String = "")
+
+    @Serializable
+    private data class GitRef(@SerialName("object") val obj: GitObject? = null)
+
+    @Serializable
+    private data class GitCommit(val tree: GitObject? = null)
+
+    @Serializable
+    private data class BlobBody(val content: String, val encoding: String)
+
+    @Serializable
+    private data class TreeEntry(
+        val path: String,
+        val mode: String,
+        val type: String,
+        val sha: String
+    )
+
+    @Serializable
+    private data class TreeBody(
+        @SerialName("base_tree") val baseTree: String?,
+        val tree: List<TreeEntry>
+    )
+
+    @Serializable
+    private data class CommitBody(
+        val message: String,
+        val tree: String,
+        val parents: List<String>
+    )
+
+    @Serializable
+    private data class RefUpdateBody(val sha: String, val force: Boolean = false)
+
+    @Serializable
+    private data class ShaPayload(val sha: String = "")
 
     @Serializable
     private data class ApiError(val message: String = "")
@@ -235,6 +280,121 @@ class GitHubApi(private val token: String) {
                     throw IllegalArgumentException(errorMessage(resp.code, body))
                 }
             }
+        }
+    }
+
+    /**
+     * 多文件原子提交（Git Data API：blobs → tree → commit → ref）—— 片段
+     * .md 与配图 .jpg 进**同一个 commit**：只触发一次发版流水线，也绝不出现
+     * 「图传了一半」的中间态（Contents API 逐文件 PUT 做不到这一点）。
+     *
+     * 竞态语义：提交期间 main 被并发推进（如恰逢 PR 合并）→ PATCH ref 返回
+     * 422（non-fast-forward）→ 整体重来一次（拉新 head 重建树），仍失败才报错。
+     *
+     * @return commit 的 html_url（结果卡展示 + 可点开）
+     */
+    suspend fun commitFiles(
+        repo: String,
+        branch: String,
+        message: String,
+        files: List<FileUpload>
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            var retryable: IllegalArgumentException? = null
+            repeat(2) { attempt ->
+                if (attempt == 1) {
+                    delay(600) // 等并发提交落地后重拉 head
+                }
+                try {
+                    return@runCatching pushFiles(repo, branch, message, files)
+                } catch (e: IllegalArgumentException) {
+                    if (e.message?.contains("fast", ignoreCase = true) == true) {
+                        retryable = e
+                    } else {
+                        throw e
+                    }
+                }
+            }
+            throw (retryable ?: error("提交失败"))
+        }
+    }
+
+    /** 单次完整 Git Data API 提交流程（无重试语义，由 [commitFiles] 驱动）。 */
+    private suspend fun pushFiles(
+        repo: String,
+        branch: String,
+        message: String,
+        files: List<FileUpload>
+    ): String {
+        val headSha = json.decodeFromString<GitRef>(
+            apiSend("GET", "repos/$repo/git/ref/heads/$branch", null)
+        ).obj?.sha?.takeIf { it.isNotBlank() }
+            ?: throw IllegalArgumentException("分支 $branch 不存在或无读取权限（404）")
+
+        val baseTree = json.decodeFromString<GitCommit>(
+            apiSend("GET", "repos/$repo/git/commits/$headSha", null)
+        ).tree?.sha
+            ?: throw IllegalArgumentException("读取基树失败（head $headSha）")
+
+        val entries = files.map { f ->
+            val blobJson = json.encodeToString(
+                BlobBody.serializer(),
+                BlobBody(
+                    content = Base64.encodeToString(f.bytes, Base64.NO_WRAP),
+                    encoding = "base64"
+                )
+            )
+            val blobSha = json.decodeFromString<ShaPayload>(
+                apiSend("POST", "repos/$repo/git/blobs", blobJson)
+            ).sha
+            TreeEntry(path = f.path, mode = "100644", type = "blob", sha = blobSha)
+        }
+
+        val treeJson = json.encodeToString(
+            TreeBody.serializer(),
+            TreeBody(baseTree = baseTree, tree = entries)
+        )
+        val newTree = json.decodeFromString<ShaPayload>(
+            apiSend("POST", "repos/$repo/git/trees", treeJson)
+        ).sha
+
+        val commitJson = json.encodeToString(
+            CommitBody.serializer(),
+            CommitBody(message = message, tree = newTree, parents = listOf(headSha))
+        )
+        val newCommit = json.decodeFromString<ShaPayload>(
+            apiSend("POST", "repos/$repo/git/commits", commitJson)
+        ).sha
+
+        val refJson = json.encodeToString(
+            RefUpdateBody.serializer(),
+            RefUpdateBody(sha = newCommit)
+        )
+        apiSend("PATCH", "repos/$repo/git/refs/heads/$branch", refJson)
+
+        return "https://github.com/$repo/commit/$newCommit"
+    }
+
+    /** 通用请求出口：2xx 返回响应体文本，其余翻译为可操作中文错误。 */
+    private suspend fun apiSend(method: String, path: String, body: String?): String {
+        val builder = Request.Builder()
+            .url(apiUrl(path))
+            .headers(commonHeaders())
+        val request = when {
+            body != null -> builder.method(
+                method, body.toRequestBody("application/json".toMediaType())
+            ).build()
+
+            method == "GET" -> builder.get().build()
+
+            else -> builder.method(method, null).build()
+        }
+        client.await(request).use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if (resp.code !in 200..299) {
+                throw IllegalArgumentException(errorMessage(resp.code, text))
+            }
+            return text
         }
     }
 

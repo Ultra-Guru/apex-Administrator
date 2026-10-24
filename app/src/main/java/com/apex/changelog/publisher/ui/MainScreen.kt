@@ -1,16 +1,26 @@
 package com.apex.changelog.publisher.ui
 
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia
+import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
@@ -18,8 +28,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddPhotoAlternate
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Warning
@@ -42,12 +56,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.apex.changelog.publisher.data.GitHubApi
+import com.apex.changelog.publisher.data.ImageKit
 import com.apex.changelog.publisher.data.PublisherPrefs
 import com.apex.changelog.publisher.ui.glass.GlassBanner
 import com.apex.changelog.publisher.ui.glass.GlassButton
@@ -60,7 +78,10 @@ import com.apex.changelog.publisher.ui.glass.SpacerH
 import com.apex.changelog.publisher.ui.glass.SpacerW
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -124,6 +145,11 @@ private sealed interface VersionStatus {
  *
  * v2.2：顶部改页内标题（顶栏退役 —— dark 底部导航接管页面切换）；
  * 两级日志语义提示更新（一级手动 / 二级 PR，主 App 弹窗「下一步」式展示）。
+ *
+ * v2.3：配图通道 —— 相册多选（≤9 张）→ 选中即落盘 cacheDir → 发送时压缩
+ * （最长边 ≤1600px / JPEG 85）→ 与片段 .md 进同一个 Git Data API 原子
+ * commit（.changelog/images/ + unreleased 片段）→ 聚合端提取 images 字段
+ * → 主 App 弹窗图廊展示。单 commit = 只触发一次发版流水线。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -150,6 +176,18 @@ fun MainScreen(
 
     // 发送历史读取 nonce（发送成功后 +1 → 历史卡即时刷新）
     var historyNonce by remember { mutableIntStateOf(0) }
+
+    // 配图（v2.3）：选中即落盘 cacheDir（photo picker 的临时授权不跨进程存活），
+    // 发送时压缩并与片段走同一个原子 commit。上限 9 张，与主 App 图廊对齐。
+    var images by remember { mutableStateOf<List<File>>(emptyList()) }
+    val imagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(ImageKit.MAX_IMAGES)
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            images = (images + uris.mapNotNull { ImageKit.stage(context, it) })
+                .take(ImageKit.MAX_IMAGES)
+        }
+    }
 
     fun reloadChannel() {
         if (!connection.ready) {
@@ -227,17 +265,49 @@ fun MainScreen(
             val commitTitle = title.trim().ifBlank {
                 content.lineSequence().firstOrNull()?.take(40) ?: "更新日志"
             }
-            val message = "docs(changelog): $commitTitle（via 发布器）"
+            val message = "docs(changelog): $commitTitle（via 发布器）" +
+                if (images.isEmpty()) "" else "，附图 ${images.size} 张"
+
+            // 配图压缩（IO 线程）：最长边 ≤1600px / JPEG 85，单图典型 <300KB
+            val compressed = withContext(Dispatchers.IO) {
+                images.map { ImageKit.compress(context, it) }
+            }
 
             // 文件头元数据：source 标记 → 聚合端置为一级置顶日志；
             // 自定义目标版本 → target 标记（构建未到 → 缓发布等未来版本）。
+            // 配图引用（![配图N](raw URL)）追加在正文之后 —— 聚合端 IMG_RE
+            // 提取进 changelog.json 的 images 字段，主 App 弹窗图廊渲染。
+            val imgBase =
+                "https://raw.githubusercontent.com/${connection.repo}/${connection.branch}"
             val fileContent = buildString {
                 appendLine("<!-- source: publisher -->")
                 if (targetCustom) appendLine("<!-- target: $target -->")
                 append(content)
+                compressed.forEachIndexed { i, _ ->
+                    appendLine()
+                    appendLine("![配图${i + 1}]($imgBase/.changelog/images/$ts-${i + 1}.jpg)")
+                }
             }
 
-            GitHubApi(connection.token).commitFragment(connection.repo, connection.branch, path, message, fileContent)
+            val api = GitHubApi(connection.token)
+            val sendResult = if (compressed.isEmpty()) {
+                api.commitFragment(connection.repo, connection.branch, path, message, fileContent)
+            } else {
+                // 多文件原子提交：配图 .jpg + 片段 .md 同一 commit（Git Data API）
+                withContext(Dispatchers.IO) {
+                    val uploads = compressed.mapIndexed { i, f ->
+                        GitHubApi.FileUpload(
+                            path = ".changelog/images/$ts-${i + 1}.jpg",
+                            bytes = f.readBytes()
+                        )
+                    } + GitHubApi.FileUpload(
+                        path = path,
+                        bytes = fileContent.toByteArray(Charsets.UTF_8)
+                    )
+                    api.commitFiles(connection.repo, connection.branch, message, uploads)
+                }
+            }
+            sendResult
                 .onSuccess { url ->
                     PublisherPrefs.addHistory(
                         context,
@@ -253,6 +323,8 @@ fun MainScreen(
                     body = ""
                     targetCustom = false
                     customVersion = ""
+                    images = emptyList()
+                    ImageKit.clearCache(context)
                     historyNonce++
                 }
                 .onFailure { e ->
@@ -533,6 +605,49 @@ fun MainScreen(
                     minLines = 7,
                     supporting = "以「- 」开头的列表项会成为主 App 弹窗一级要点；当前 ${body.length} 字"
                 )
+
+                // ── 配图（v2.3）：发送图片，主 App 弹窗图廊展示 ──────────────
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "配图（${images.size}/${ImageKit.MAX_IMAGES}）",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    GlassIconButton(
+                        onClick = {
+                            if (images.size < ImageKit.MAX_IMAGES) {
+                                imagePicker.launch(
+                                    PickVisualMediaRequest(
+                                        ActivityResultContracts.PickVisualMedia.ImageOnly
+                                    )
+                                )
+                            }
+                        },
+                        backdrop = backdrop,
+                        icon = Icons.Filled.AddPhotoAlternate,
+                        contentDescription = "添加配图",
+                        size = 38.dp
+                    )
+                }
+                if (images.isNotEmpty()) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        images.forEach { img ->
+                            ImageThumb(file = img) {
+                                images = images - img
+                                img.delete()
+                            }
+                        }
+                    }
+                    HintText(
+                        "发送时自动压缩（最长边 ≤1600px）并提交到 .changelog/images/，" +
+                            "与片段同一 commit —— 只触发一次构建；新版主 App 弹窗内图廊展示"
+                    )
+                }
             }
         }
 
@@ -720,6 +835,58 @@ fun MainScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+/** 配图缩略图（inSampleSize 解码防内存峰值；右上 ✕ 移除并删缓存文件）。 */
+@Composable
+private fun ImageThumb(file: File, onRemove: () -> Unit) {
+    val bitmap = remember(file.absolutePath) {
+        runCatching {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, bounds)
+            val sample = maxOf(1, maxOf(bounds.outWidth, bounds.outHeight) / 256)
+            BitmapFactory.decodeFile(
+                file.absolutePath,
+                BitmapFactory.Options().apply { inSampleSize = sample }
+            )
+        }.getOrNull()
+    }
+    Box {
+        val shape = RoundedCornerShape(12.dp)
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier
+                    .size(84.dp)
+                    .clip(shape),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Box(
+                Modifier
+                    .size(84.dp)
+                    .clip(shape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            )
+        }
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.55f))
+                .clickable(onClick = onRemove),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = "移除配图",
+                modifier = Modifier.size(14.dp),
+                tint = androidx.compose.ui.graphics.Color.White
+            )
         }
     }
 }
