@@ -18,10 +18,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -41,10 +43,14 @@ import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.NewReleases
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -149,6 +155,11 @@ private sealed interface VersionStatus {
  * （最长边 ≤1600px / JPEG 85）→ 与片段 .md 进同一个 Git Data API 原子
  * commit（.changelog/images/ + unreleased 片段）→ 聚合端提取 images 字段
  * → 主 App 弹窗图廊展示。单 commit = 只触发一次发版流水线。
+ *
+ * v2.3.1：效果预览 —— 发送前 1:1 模拟主 App 升级首启的两步弹窗
+ * （第 1 步 = 本条手动日志要点 + 配图图廊 →「下一步」→ 第 2 步 =
+ * PR 功能变更分组），发布器端所见即用户所得；要点提取与聚合端
+ * changelog.py 的 BULLET_RE 同规则（列表项剥壳）。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -175,6 +186,9 @@ fun MainScreen(
 
     // 发送历史读取 nonce（发送成功后 +1 → 历史卡即时刷新）
     var historyNonce by remember { mutableIntStateOf(0) }
+
+    // 效果预览（v2.3.1）：发送前模拟主 App 两步弹窗 —— 所见即用户所得
+    var previewing by remember { mutableStateOf(false) }
 
     // 配图（v2.3）：选中即落盘 cacheDir（photo picker 的临时授权不跨进程存活），
     // 发送时压缩并与片段走同一个原子 commit。上限 9 张，与主 App 图廊对齐。
@@ -340,6 +354,23 @@ fun MainScreen(
             sending = false
             reloadStaged()
         }
+    }
+
+    // ── 效果预览（v2.3.1）：1:1 模拟主 App 升级首启两步弹窗 ──────────
+    // 版本号取下一版预告（拉不到就退「下一版」字样 —— 预览重在内容形态）。
+    if (previewing) {
+        val nextLabel = (versionStatus as? VersionStatus.Ready)?.let { vs ->
+            vs.nextHint?.let { hint ->
+                if (versionGt(hint, vs.latest?.versionName ?: "") == true) hint
+                else vs.latest?.versionName?.let { bumpLastOrdinal(it) }
+            } ?: vs.latest?.versionName?.let { bumpLastOrdinal(it) }
+        } ?: "下一版"
+        ChangelogPreviewDialog(
+            nextVersion = nextLabel,
+            body = body,
+            images = images,
+            onDismiss = { previewing = false }
+        )
     }
 
     Column(
@@ -650,34 +681,58 @@ fun MainScreen(
             }
         }
 
-        // ── 发送 ────────────────────────────────────────────────────
+        // ── 发送 + 效果预览 ─────────────────────────────────────────
         GlassEntrance(delayMillis = 160) {
-            GlassButton(
-                onClick = { send() },
-                backdrop = backdrop,
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                enabled = body.isNotBlank() && !sending,
-                tint = MaterialTheme.colorScheme.primary,
-                fill = MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                if (sending) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.height(18.dp).width(18.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onPrimary
-                    )
-                    Text("提交中…", color = MaterialTheme.colorScheme.onPrimary)
-                } else {
+                GlassButton(
+                    onClick = { previewing = true },
+                    backdrop = backdrop,
+                    modifier = Modifier.weight(1f),
+                    enabled = body.isNotBlank(),
+                    tint = MaterialTheme.colorScheme.primary,
+                    fill = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+                ) {
                     Icon(
-                        Icons.Filled.Send,
+                        Icons.Outlined.Visibility,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimary
+                        tint = MaterialTheme.colorScheme.primary
                     )
                     Text(
-                        "发送 → 触发新版本构建",
-                        color = MaterialTheme.colorScheme.onPrimary,
+                        "效果预览",
+                        color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.SemiBold
                     )
+                }
+                GlassButton(
+                    onClick = { send() },
+                    backdrop = backdrop,
+                    modifier = Modifier.weight(2f),
+                    enabled = body.isNotBlank() && !sending,
+                    tint = MaterialTheme.colorScheme.primary,
+                    fill = MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)
+                ) {
+                    if (sending) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.height(18.dp).width(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                        Text("提交中…", color = MaterialTheme.colorScheme.onPrimary)
+                    } else {
+                        Icon(
+                            Icons.Filled.Send,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimary
+                        )
+                        Text(
+                            "发送 → 触发新版本构建",
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                 }
             }
         }
@@ -837,6 +892,199 @@ fun MainScreen(
         }
     }
 }
+
+/**
+ * 效果预览弹窗（v2.3.1）—— 1:1 模拟主 App 升级首启的两步更新日志弹窗：
+ *
+ * - 第 1 步「更新日志」：本条手动日志的要点（列表项剥壳，与聚合端
+ *   changelog.py 的 BULLET_RE 同规则）+ 配图缩略图墙；
+ * - 「下一步 · 功能变更」→ 第 2 步：说明 PR 合并内容将在该步分组展示；
+ * - 顶部步骤指示与主 App 弹窗同构 —— 发布器端所见即用户所得。
+ */
+@Composable
+private fun ChangelogPreviewDialog(
+    nextVersion: String,
+    body: String,
+    images: List<File>,
+    onDismiss: () -> Unit
+) {
+    val notes = remember(body) { extractPreviewNotes(body) }
+    var step by remember { mutableStateOf(0) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                "v$nextVersion 更新内容（预览）",
+                fontWeight = FontWeight.SemiBold
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 380.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                // 步骤指示：与主 App 弹窗同构
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    PreviewStepChip(active = step == 0, text = "① 更新日志")
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 8.dp)
+                            .height(2.dp)
+                            .background(
+                                if (step >= 1) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                                else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+                                RoundedCornerShape(1.dp)
+                            )
+                    )
+                    PreviewStepChip(active = step == 1, text = "② 功能变更")
+                }
+                Spacer(Modifier.height(12.dp))
+                if (step == 0) {
+                    if (notes.isEmpty()) {
+                        Text(
+                            "正文没有「- 」列表项 —— 主 App 弹窗将取首行作摘要；建议用列表项写要点",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                    notes.forEach { note ->
+                        Row(modifier = Modifier.padding(vertical = 3.dp)) {
+                            Text(
+                                "•",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                note,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                    if (images.isNotEmpty()) {
+                        if (notes.isNotEmpty()) Spacer(Modifier.height(10.dp))
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            images.take(9).forEach { PreviewImageThumb(file = it) }
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "配图在新版弹窗内以图廊展示，点开可全屏缩放查看",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                } else {
+                    Text(
+                        "功能变更",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "用户点「下一步」后在这里看到本版合并的 PR 功能变更分组" +
+                            "（新增功能 / 修复，按 PR 标题分组）。你的手动日志恒在第 1 步置顶 ——" +
+                            "即使该版本没有 PR 合并，你的公告也照常展示。",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (step == 0) {
+                Button(onClick = { step = 1 }) { Text("下一步 · 功能变更") }
+            } else {
+                Button(onClick = onDismiss) { Text("知道了") }
+            }
+        },
+        dismissButton = {
+            if (step == 0) {
+                TextButton(onClick = onDismiss) { Text("关闭预览") }
+            } else {
+                TextButton(onClick = { step = 0 }) { Text("上一步") }
+            }
+        }
+    )
+}
+
+/** 预览步骤胶囊（主 App StepChip 同构的轻量版）。 */
+@Composable
+private fun PreviewStepChip(active: Boolean, text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = if (active) FontWeight.SemiBold else null,
+        color = if (active) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.outline,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+            )
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+    )
+}
+
+/** 预览配图缩略图（inSampleSize 解码；只读展示，无移除交互）。 */
+@Composable
+private fun PreviewImageThumb(file: File) {
+    val bitmap = remember(file.absolutePath) {
+        runCatching {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, bounds)
+            val sample = maxOf(1, maxOf(bounds.outWidth, bounds.outHeight) / 256)
+            BitmapFactory.decodeFile(
+                file.absolutePath,
+                BitmapFactory.Options().apply { inSampleSize = sample }
+            )
+        }.getOrNull()
+    }
+    val shape = RoundedCornerShape(10.dp)
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = "配图预览",
+            modifier = Modifier
+                .size(width = 96.dp, height = 72.dp)
+                .clip(shape),
+            contentScale = ContentScale.Crop
+        )
+    } else {
+        Box(
+            Modifier
+                .size(width = 96.dp, height = 72.dp)
+                .clip(shape)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+        )
+    }
+}
+
+/** 要点提取 —— 与聚合端 changelog.py 的 BULLET_RE 同规则（列表项剥壳、
+ * 行内图片引用剥除；无列表项回退首行摘要）。 */
+private fun extractPreviewNotes(body: String): List<String> {
+    val bullets = body.lineSequence()
+        .mapNotNull { line -> PREVIEW_BULLET_RE.find(line)?.groupValues?.get(1) }
+        .map { bullet -> PREVIEW_IMG_RE.replace(bullet, "").trim() }
+        .filter { it.isNotEmpty() }
+        .toList()
+    if (bullets.isNotEmpty()) return bullets
+    val first = body.lineSequence()
+        .map { PREVIEW_IMG_RE.replace(it, "").trim() }
+        .firstOrNull { it.isNotEmpty() }
+        ?: return emptyList()
+    return listOf(first.take(60) + if (first.length > 60) "…" else "")
+}
+
+/** 与 changelog.py BULLET_RE 同源的列表项剥壳正则。 */
+private val PREVIEW_BULLET_RE =
+    Regex("""^\s*(?:[-*•·]|\d+[.、)])\s+(.+?)\s*$""")
+
+/** 与 changelog.py IMG_RE 同源的行内图片引用。 */
+private val PREVIEW_IMG_RE = Regex("""!\[[^\]]*\]\(\S+?\)""")
 
 /** 配图缩略图（inSampleSize 解码防内存峰值；右上 ✕ 移除并删缓存文件）。 */
 @Composable

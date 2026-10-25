@@ -21,10 +21,12 @@ android {
         // 版本地板值：CI 发版流水线会用 -PappVersionCode/-PappVersionName
         // 覆盖（versionCode = max(远端 version.json, 地板) 自增 —— 防撞号，
         // 与主仓库同款对账逻辑；versionName 由流水线追加构建序号）。
+        // v2.3.0 地板：配图通道 + 效果预览已在线上以 2.2.0.6 误发过一版
+        // （彼时未 bump 基名）—— 地板抬到 2.3.0 让自更新通道正确播报。
         val ciVersionCode = providers.gradleProperty("appVersionCode").orElse("").get().toIntOrNull()
         val ciVersionName = providers.gradleProperty("appVersionName").orElse("").get().ifBlank { null }
-        versionCode = ciVersionCode ?: 3
-        versionName = ciVersionName ?: "2.2.0"
+        versionCode = ciVersionCode ?: 7
+        versionName = ciVersionName ?: "2.3.0"
     }
 
     // ── 签名（meng411722）────────────────────────────────────────────
